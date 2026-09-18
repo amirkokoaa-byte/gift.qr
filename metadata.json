@@ -1,0 +1,6 @@
+{
+  "name": "Soft Rose Gift Distribution",
+  "description": "حملة توزيع الهدايا لشركة سوفت روز انترناشيونال - Soft Rose International Gift Distribution Campaign",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
