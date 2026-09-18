@@ -31,6 +31,8 @@ export interface SessionRecord {
   status: 'active' | 'scanned' | 'used';
   scannedAt?: string;
   scannedAtMillis?: number;
+  isGenerated?: boolean;
+  createdAtMillis?: number;
   claimedBy?: {
     name: string;
     phone: string;

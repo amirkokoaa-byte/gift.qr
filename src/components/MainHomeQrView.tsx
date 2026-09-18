@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react';
 import QRCode from 'qrcode';
 import { Smartphone, Sparkles, RefreshCw, Copy, Check, ExternalLink, ShieldCheck } from 'lucide-react';
 import { CampaignSettings } from '../types';
-import { createNewSessionId, subscribeToSession } from '../services/firebase';
+import { createNewSessionId, subscribeToSession, registerGeneratedSession } from '../services/firebase';
 
 interface MainHomeQrViewProps {
   currentSessionId: string;
@@ -50,6 +50,11 @@ export const MainHomeQrView: React.FC<MainHomeQrViewProps> = ({
 
   // Generate the real QR Code URL that points to the customer's gift session
   useEffect(() => {
+    if (!currentSessionId) return;
+
+    // Register this active session in local & cloud registry as officially generated
+    registerGeneratedSession(currentSessionId).catch(() => {});
+
     // Current public/app URL with session query parameter
     const origin = window.location.origin;
     const pathname = window.location.pathname;

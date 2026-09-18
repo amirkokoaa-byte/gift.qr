@@ -10,7 +10,13 @@ import { AdminPasscodeModal } from './components/AdminPasscodeModal';
 import { QRCodeTesterModal } from './components/QRCodeTesterModal';
 import { CodeDocumentationModal } from './components/CodeDocumentationModal';
 import { CampaignSettings } from './types';
-import { DEFAULT_SETTINGS, getCampaignSettings, createNewSessionId } from './services/firebase';
+import {
+  DEFAULT_SETTINGS,
+  getCampaignSettings,
+  createNewSessionId,
+  verifySessionAuthenticity,
+  registerGeneratedSession,
+} from './services/firebase';
 
 export default function App() {
   const [settings, setSettings] = useState<CampaignSettings>(DEFAULT_SETTINGS);
@@ -29,23 +35,71 @@ export default function App() {
   const [isTamperedLock, setIsTamperedLock] = useState<boolean>(false);
   const [tamperReason, setTamperReason] = useState<string>('');
 
-  // Check if this device has already registered/claimed and if customer alters URL or attempts re-scan
-  const checkUrlSecurity = (targetSession?: string | null) => {
-    try {
-      const rawDeviceClaim = localStorage.getItem('softrose_device_claimed');
-      if (rawDeviceClaim) {
-        const deviceClaim = JSON.parse(rawDeviceClaim);
-        if (deviceClaim && deviceClaim.claimed) {
-          const currentParams = new URLSearchParams(window.location.search);
-          const activeSessionInUrl = targetSession !== undefined ? targetSession : currentParams.get('session');
+  // Register current session in local & cloud stores whenever it changes
+  useEffect(() => {
+    if (currentSessionId) {
+      registerGeneratedSession(currentSessionId).catch(() => {});
+    }
+  }, [currentSessionId]);
 
-          // If the customer changed the session parameter or wiped it to scan again
-          if (activeSessionInUrl && activeSessionInUrl !== deviceClaim.sessionId) {
-            setTamperReason('تم تعديل رابط الجلسة أو محاولة عمل مسح جديد بعد تسجيل الاسم ورقم الهاتف مسبقاً من هذا الهاتف.');
+  // Check if this device has already registered/claimed and detect URL tampering
+  const checkUrlSecurity = async (targetSession?: string | null) => {
+    try {
+      const currentParams = new URLSearchParams(window.location.search);
+      const activeSessionInUrl = targetSession !== undefined ? targetSession : currentParams.get('session');
+
+      // Check query parameter whitelist (prevent unauthorized query tampering)
+      const allowedParams = new Set(['session', 'view', 'test']);
+      for (const key of currentParams.keys()) {
+        if (!allowedParams.has(key)) {
+          setTamperReason('تم رصد معاملات غير مصرح بها أو تلاعب في رابط المتصفح. لا يمكن المتابعة إلا برمز الإدارة.');
+          setIsTamperedLock(true);
+          return true;
+        }
+      }
+
+      const rawDeviceClaim = localStorage.getItem('softrose_device_claimed');
+      let priorClaim: any = null;
+      if (rawDeviceClaim) {
+        try {
+          priorClaim = JSON.parse(rawDeviceClaim);
+        } catch {}
+      }
+
+      // If user previously claimed and wipes ?session= from browser to access kiosk home without admin auth
+      if (priorClaim && priorClaim.claimed && !activeSessionInUrl && !isAdminLoggedIn) {
+        setTamperReason('تمت إزالة رابط المشاركة من شريط المتصفح. لا يمكن المتابعة إلا بإدخال رمز مرور الإدارة.');
+        setIsTamperedLock(true);
+        return true;
+      }
+
+      // If there is an active session in the URL, verify its integrity and authenticity
+      if (activeSessionInUrl) {
+        const verification = await verifySessionAuthenticity(activeSessionInUrl);
+        if (!verification.isValid || !verification.isOfficial) {
+          setTamperReason(verification.reason || 'تم رصد تلاعب في رابط الجلسة أو المتصفح.');
+          setIsTamperedLock(true);
+          return true;
+        }
+
+        // If the customer already claimed previously on this device:
+        if (priorClaim && priorClaim.claimed) {
+          if (activeSessionInUrl === priorClaim.sessionId) {
+            // Viewing their claimed card - legitimate
+            return false;
+          }
+
+          // If different session: Must be an officially generated, active QR code (المولد فقط)
+          if (verification.isOfficial && verification.status !== 'used') {
+            // Customer bought again and scanned the new QR code - ALLOWED!
+            return false;
+          } else if (verification.status === 'used') {
+            setTamperReason('رمز الجلسة هذا تم استخدامه واستلام هديته بالفعل مسبقاً.');
             setIsTamperedLock(true);
             return true;
-          } else if (!activeSessionInUrl && !isAdminLoggedIn) {
-            setTamperReason('تمت إزالة رابط المشاركة من شريط المتصفح. لا يمكن المتابعة إلا بإدخال رمز مرور الإدارة.');
+          } else {
+            // Tampered or unregistered session
+            setTamperReason('تم رصد تلاعب في رابط الجلسة أو محاولة استخدام كود غير معتمد.');
             setIsTamperedLock(true);
             return true;
           }

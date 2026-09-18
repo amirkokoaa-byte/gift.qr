@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { Gift, Sparkles, Download, CheckCircle2, AlertCircle, Phone, User, Lock, ArrowRight, Share2, Award } from 'lucide-react';
 import confetti from 'canvas-confetti';
 import { CampaignSettings, SessionRecord } from '../types';
-import { claimGiftWithUniqueNumber, getSessionRecord, markSessionAsScanned } from '../services/firebase';
+import { claimGiftWithUniqueNumber, getSessionRecord, markSessionAsScanned, verifySessionAuthenticity } from '../services/firebase';
 
 interface CustomerGiftViewProps {
   sessionId: string;
@@ -47,7 +47,26 @@ export const CustomerGiftView: React.FC<CustomerGiftViewProps> = ({
     async function checkCurrentSession() {
       setIsCheckingSession(true);
       try {
-        // Check if this device has already claimed a gift previously
+        if (!sessionId) {
+          if (onRequireAdminPasscode) {
+            onRequireAdminPasscode('رابط الجلسة غير صالح أو مفقود. يرجى إدخال رمز مرور الإدارة.');
+          }
+          if (isMounted) setIsCheckingSession(false);
+          return;
+        }
+
+        // 1. Verify session authenticity & check for URL tampering
+        const verification = await verifySessionAuthenticity(sessionId);
+        if (!verification.isValid || !verification.isOfficial) {
+          // Tampered URL!
+          if (onRequireAdminPasscode) {
+            onRequireAdminPasscode(verification.reason || 'تم رصد تلاعب في رابط الجلسة. يرجى إدخال رمز مرور الإدارة للمتابعة.');
+          }
+          if (isMounted) setIsCheckingSession(false);
+          return;
+        }
+
+        // 2. Check if this device has already claimed a gift previously
         const rawDeviceClaim = localStorage.getItem('softrose_device_claimed');
         if (rawDeviceClaim) {
           try {
@@ -60,13 +79,31 @@ export const CustomerGiftView: React.FC<CustomerGiftViewProps> = ({
                 setFinalGiftNumber(deviceClaim.giftNumber || null);
                 setDisplayNumber(deviceClaim.giftNumber || null);
                 setIsClaimCompleted(true);
-              } else {
-                // Different session! The customer changed the link in the URL or scanned another QR code!
-                if (onRequireAdminPasscode) {
-                  onRequireAdminPasscode('تم تعديل رابط الجلسة أو محاولة إجراء مسح جديد بعد استلام الهدية مسبقاً من هذا الهاتف.');
-                }
                 if (isMounted) setIsCheckingSession(false);
                 return;
+              } else {
+                // Different session! Customer scanned again after another purchase, or altered link
+                // Check if it's an authentic newly generated QR code from the booth (المولد فقط)
+                if (verification.isOfficial && verification.status !== 'used') {
+                  // Legitimate customer who made another purchase and scanned the newly generated QR code
+                  if (deviceClaim.customerName) setCustomerName(deviceClaim.customerName);
+                  if (deviceClaim.phoneNumber) setPhoneNumber(deviceClaim.phoneNumber);
+                  setIsClaimCompleted(false);
+                  setFinalGiftNumber(null);
+                  // Allowed to proceed!
+                } else if (verification.status === 'used') {
+                  setIsSessionLocked(true);
+                  setLockedSessionData(verification.sessionRecord || null);
+                  if (isMounted) setIsCheckingSession(false);
+                  return;
+                } else {
+                  // Tampered or invalid session
+                  if (onRequireAdminPasscode) {
+                    onRequireAdminPasscode('تم رصد تلاعب في رابط الجلسة أو محاولة إدخال كود غير معتمد.');
+                  }
+                  if (isMounted) setIsCheckingSession(false);
+                  return;
+                }
               }
             }
           } catch (e) {
@@ -74,11 +111,11 @@ export const CustomerGiftView: React.FC<CustomerGiftViewProps> = ({
           }
         }
 
-        const session = await getSessionRecord(sessionId);
+        // 3. Normal session status check
         if (isMounted) {
-          if (session && session.status === 'used') {
+          if (verification.status === 'used' || (verification.sessionRecord && verification.sessionRecord.status === 'used')) {
             setIsSessionLocked(true);
-            setLockedSessionData(session);
+            setLockedSessionData(verification.sessionRecord || null);
           } else {
             setIsSessionLocked(false);
             setLockedSessionData(null);
