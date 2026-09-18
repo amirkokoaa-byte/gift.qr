@@ -12,6 +12,16 @@ import {
 import { getStorage, ref, uploadString, getDownloadURL, type FirebaseStorage } from 'firebase/storage';
 import { CustomerRecord, CampaignSettings, SessionRecord, GenerationResult } from '../types';
 
+// Production Firebase Configuration for Soft Rose International
+export const DEFAULT_FIREBASE_CONFIG = {
+  apiKey: "AIzaSyCwD7gdyijyY4-3OvVBl4DS_PYa6-4q3-k",
+  authDomain: "qr-soft-1f4fe.firebaseapp.com",
+  projectId: "qr-soft-1f4fe",
+  storageBucket: "qr-soft-1f4fe.firebasestorage.app",
+  messagingSenderId: "527054632033",
+  appId: "1:527054632033:web:84c70f305b6f156c53e620",
+};
+
 // Default initial company settings for Soft Rose International
 export const DEFAULT_SETTINGS: CampaignSettings = {
   companyName: 'سوفت روز انترناشيونال',
@@ -20,6 +30,7 @@ export const DEFAULT_SETTINGS: CampaignSettings = {
   minNumber: 1000,
   maxNumber: 9999,
   adminPasscode: '0000',
+  firebaseConfig: DEFAULT_FIREBASE_CONFIG,
 };
 
 // Storage keys for local persistence & fallback
@@ -74,7 +85,7 @@ export function getStoredFirebaseConfig() {
   } catch {
     // Ignore error
   }
-  return null;
+  return DEFAULT_FIREBASE_CONFIG;
 }
 
 // -------------------------------------------------------------
@@ -394,6 +405,15 @@ function performLocalAtomicTransaction(
     customers.unshift(newRecord);
     localStorage.setItem(CUSTOMERS_STORAGE_KEY, JSON.stringify(customers));
 
+    // Also push to Firestore cloud database directly so all devices see the customer immediately
+    const { db, isFirebaseActive } = initFirebase();
+    if (isFirebaseActive && db) {
+      const customerDocRef = doc(db, 'customers', newRecord.id);
+      setDoc(customerDocRef, newRecord).catch((e) => console.warn('Firestore fallback customer write error:', e));
+      const sessionDocRef = doc(db, 'sessions', sessionId);
+      setDoc(sessionDocRef, sessionData, { merge: true }).catch((e) => console.warn('Firestore fallback session write error:', e));
+    }
+
     // Dispatch custom event for real-time reactivity in the same tab/window
     window.dispatchEvent(new CustomEvent('softrose_data_updated'));
 
@@ -410,10 +430,13 @@ function performLocalAtomicTransaction(
 }
 
 // -------------------------------------------------------------
-// Real-time Customers Listener
+// Real-time Customers Listener (Cloud Firestore + Local Merge)
 // -------------------------------------------------------------
 export function subscribeToCustomers(callback: (customers: CustomerRecord[]) => void): () => void {
   const { db, isFirebaseActive } = initFirebase();
+
+  // Trigger background sync of any previously unsynced local records
+  syncLocalCustomersToFirestore().catch((err) => console.warn('Initial sync error:', err));
 
   if (isFirebaseActive && db) {
     try {
@@ -423,6 +446,20 @@ export function subscribeToCustomers(callback: (customers: CustomerRecord[]) => 
         (snap) => {
           const list: CustomerRecord[] = [];
           snap.forEach((d) => list.push({ id: d.id, ...(d.data() as any) }));
+
+          // Merge any local records that might not be in Firestore yet
+          try {
+            const rawLocal = localStorage.getItem(CUSTOMERS_STORAGE_KEY);
+            if (rawLocal) {
+              const localList: CustomerRecord[] = JSON.parse(rawLocal);
+              for (const loc of localList) {
+                if (!list.some((c) => c.id === loc.id || c.sessionId === loc.sessionId)) {
+                  list.push(loc);
+                }
+              }
+            }
+          } catch {}
+
           // Sort newest first
           list.sort((a, b) => (b.claimedAtMillis || 0) - (a.claimedAtMillis || 0));
           callback(list);
@@ -448,6 +485,26 @@ export function subscribeToCustomers(callback: (customers: CustomerRecord[]) => 
     window.removeEventListener('softrose_data_updated', handleUpdate);
     window.removeEventListener('storage', handleUpdate);
   };
+}
+
+// Upload any records stored in localStorage into Firestore cloud
+export async function syncLocalCustomersToFirestore(): Promise<void> {
+  const { db, isFirebaseActive } = initFirebase();
+  if (!isFirebaseActive || !db) return;
+
+  try {
+    const raw = localStorage.getItem(CUSTOMERS_STORAGE_KEY);
+    if (!raw) return;
+    const localCustomers: CustomerRecord[] = JSON.parse(raw);
+    for (const cust of localCustomers) {
+      if (cust.sessionId) {
+        const cRef = cust.id ? doc(db, 'customers', cust.id) : doc(collection(db, 'customers'));
+        await setDoc(cRef, cust, { merge: true });
+      }
+    }
+  } catch (err) {
+    console.warn('Sync local customers to firestore warning:', err);
+  }
 }
 
 function loadLocalCustomers(callback: (customers: CustomerRecord[]) => void) {

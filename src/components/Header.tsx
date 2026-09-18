@@ -10,6 +10,7 @@ interface HeaderProps {
   activeView: 'home_qr' | 'customer' | 'admin';
   onNavigate: (view: 'home_qr' | 'customer' | 'admin') => void;
   onOpenQrSimulator?: () => void;
+  isCustomerMode?: boolean;
 }
 
 export const Header: React.FC<HeaderProps> = ({
@@ -20,6 +21,7 @@ export const Header: React.FC<HeaderProps> = ({
   activeView,
   onNavigate,
   onOpenQrSimulator,
+  isCustomerMode = false,
 }) => {
   const [timeState, setTimeState] = useState({
     timeStr: '',
@@ -61,7 +63,12 @@ export const Header: React.FC<HeaderProps> = ({
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-20 flex items-center justify-between">
         {/* Left corner: Company Logo & Company Name */}
         <div className="flex items-center gap-3.5">
-          <div className="relative group cursor-pointer" onClick={() => onNavigate('home_qr')}>
+          <div
+            className={`relative group ${!isCustomerMode ? 'cursor-pointer' : ''}`}
+            onClick={() => {
+              if (!isCustomerMode) onNavigate('home_qr');
+            }}
+          >
             {settings.logoUrl ? (
               <img
                 src={settings.logoUrl}
@@ -108,8 +115,8 @@ export const Header: React.FC<HeaderProps> = ({
             </div>
           </div>
 
-          {/* QR Simulator / Test Mode Button */}
-          {onOpenQrSimulator && (
+          {/* QR Simulator / Test Mode Button (Hidden for Customer) */}
+          {!isCustomerMode && onOpenQrSimulator && (
             <button
               id="qr-test-button"
               onClick={onOpenQrSimulator}
@@ -121,23 +128,25 @@ export const Header: React.FC<HeaderProps> = ({
             </button>
           )}
 
-          {/* Admin Dashboard Gear Button */}
-          <button
-            id="admin-settings-gear-btn"
-            onClick={onOpenAdminAuth}
-            aria-label="لوحة تحكم المدير"
-            title="لوحة تحكم المدير (الرمز: 0000)"
-            className={`relative p-2.5 rounded-xl transition-all duration-200 border flex items-center justify-center ${
-              activeView === 'admin'
-                ? 'bg-[#14382c] text-white border-[#14382c] shadow-md shadow-emerald-950/20'
-                : 'bg-white hover:bg-rose-50/80 text-[#14382c] border-emerald-900/15 shadow-2xs hover:border-rose-300'
-            }`}
-          >
-            <Settings className={`w-5 h-5 ${activeView === 'admin' ? 'rotate-90' : 'hover:rotate-45 transition-transform duration-300'}`} />
-            {isAdminLoggedIn && (
-              <span className="absolute -top-1 -right-1 w-3 h-3 bg-emerald-500 border-2 border-white rounded-full"></span>
-            )}
-          </button>
+          {/* Admin Dashboard Gear Button (Hidden for Customer) */}
+          {!isCustomerMode && (
+            <button
+              id="admin-settings-gear-btn"
+              onClick={onOpenAdminAuth}
+              aria-label="لوحة تحكم المدير"
+              title="لوحة تحكم المدير (الرمز: 0000)"
+              className={`relative p-2.5 rounded-xl transition-all duration-200 border flex items-center justify-center ${
+                activeView === 'admin'
+                  ? 'bg-[#14382c] text-white border-[#14382c] shadow-md shadow-emerald-950/20'
+                  : 'bg-white hover:bg-rose-50/80 text-[#14382c] border-emerald-900/15 shadow-2xs hover:border-rose-300'
+              }`}
+            >
+              <Settings className={`w-5 h-5 ${activeView === 'admin' ? 'rotate-90' : 'hover:rotate-45 transition-transform duration-300'}`} />
+              {isAdminLoggedIn && (
+                <span className="absolute -top-1 -right-1 w-3 h-3 bg-emerald-500 border-2 border-white rounded-full"></span>
+              )}
+            </button>
+          )}
         </div>
       </div>
     </header>

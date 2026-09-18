@@ -14,6 +14,7 @@ export default function App() {
   const [settings, setSettings] = useState<CampaignSettings>(DEFAULT_SETTINGS);
   const [currentSessionId, setCurrentSessionId] = useState<string>('sr_booth_gift_1');
   const [activeView, setActiveView] = useState<'home_qr' | 'customer' | 'admin'>('home_qr');
+  const [isCustomerMode, setIsCustomerMode] = useState<boolean>(false);
 
   // Modal controls
   const [isAdminLoggedIn, setIsAdminLoggedIn] = useState<boolean>(false);
@@ -35,9 +36,14 @@ export default function App() {
 
     if (sessionParam) {
       setCurrentSessionId(sessionParam);
-      // When a customer opens via scanning the QR code, immediately show the customer view
+      // When a customer opens via scanning the QR code, immediately show only the customer view
       setActiveView('customer');
+      setIsCustomerMode(true);
+    } else {
+      setActiveView('home_qr');
+      setIsCustomerMode(false);
     }
+
     if (viewParam === 'admin') {
       setIsPasscodeModalOpen(true);
     }
@@ -70,6 +76,10 @@ export default function App() {
     window.history.pushState({ path: newUrl }, '', newUrl);
   };
 
+  // Determine if tabs and navigation should be displayed
+  // Customer never sees the tabs; Main screen only shows tabs after admin logs in with password
+  const showViewSwitcherTabs = isAdminLoggedIn;
+
   return (
     <div
       className="min-h-screen flex flex-col font-sans selection:bg-rose-200 selection:text-rose-900 relative overflow-x-hidden"
@@ -90,57 +100,56 @@ export default function App() {
         activeView={activeView}
         onNavigate={(view) => setActiveView(view)}
         onOpenQrSimulator={() => setIsQrSimulatorOpen(true)}
+        isCustomerMode={isCustomerMode && !isAdminLoggedIn}
       />
 
-      {/* View Switcher Tabs */}
-      <div className="max-w-7xl mx-auto w-full px-4 sm:px-6 lg:px-8 mt-4 flex items-center justify-between">
-        <div className="flex items-center gap-1.5 p-1 rounded-2xl bg-white/70 backdrop-blur-xs border border-emerald-900/10 shadow-2xs text-xs font-bold">
-          <button
-            onClick={() => setActiveView('home_qr')}
-            className={`px-3.5 py-1.5 rounded-xl transition-all ${
-              activeView === 'home_qr'
-                ? 'bg-[#14382c] text-white shadow-xs'
-                : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100/60'
-            }`}
-          >
-            شاشة الكود (Scan Me)
-          </button>
+      {/* View Switcher Tabs - Only visible after entering admin passcode */}
+      {showViewSwitcherTabs && (
+        <div className="max-w-7xl mx-auto w-full px-4 sm:px-6 lg:px-8 mt-4 flex items-center justify-between animate-in fade-in slide-in-from-top-2 duration-300">
+          <div className="flex items-center gap-1.5 p-1 rounded-2xl bg-white/70 backdrop-blur-xs border border-emerald-900/10 shadow-2xs text-xs font-bold">
+            <button
+              onClick={() => setActiveView('home_qr')}
+              className={`px-3.5 py-1.5 rounded-xl transition-all ${
+                activeView === 'home_qr'
+                  ? 'bg-[#14382c] text-white shadow-xs'
+                  : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100/60'
+              }`}
+            >
+              شاشة الكود (Scan Me)
+            </button>
 
-          <button
-            onClick={() => setActiveView('customer')}
-            className={`px-3.5 py-1.5 rounded-xl transition-all ${
-              activeView === 'customer'
-                ? 'bg-[#14382c] text-white shadow-xs'
-                : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100/60'
-            }`}
-          >
-            صفحة العميل (هاتف العميل)
-          </button>
+            <button
+              onClick={() => setActiveView('customer')}
+              className={`px-3.5 py-1.5 rounded-xl transition-all ${
+                activeView === 'customer'
+                  ? 'bg-[#14382c] text-white shadow-xs'
+                  : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100/60'
+              }`}
+            >
+              صفحة العميل (هاتف العميل)
+            </button>
 
-          <button
-            onClick={() => {
-              if (isAdminLoggedIn) setActiveView('admin');
-              else setIsPasscodeModalOpen(true);
-            }}
-            className={`px-3.5 py-1.5 rounded-xl transition-all flex items-center gap-1.5 ${
-              activeView === 'admin'
-                ? 'bg-[#14382c] text-white shadow-xs'
-                : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100/60'
-            }`}
-          >
-            <span>لوحة الإدارة (Admin)</span>
-            {!isAdminLoggedIn && <span className="text-[10px] text-slate-400 font-mono">🔒</span>}
-          </button>
+            <button
+              onClick={() => setActiveView('admin')}
+              className={`px-3.5 py-1.5 rounded-xl transition-all flex items-center gap-1.5 ${
+                activeView === 'admin'
+                  ? 'bg-[#14382c] text-white shadow-xs'
+                  : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100/60'
+              }`}
+            >
+              <span>لوحة الإدارة (Admin)</span>
+            </button>
+          </div>
+
+          {/* Current Session Tag */}
+          <div className="hidden sm:flex items-center gap-2 text-xs text-slate-500 font-medium">
+            <span>الجلسة الحالية:</span>
+            <span className="font-mono font-bold text-emerald-800 bg-emerald-100/60 px-2 py-0.5 rounded-lg border border-emerald-200">
+              {currentSessionId}
+            </span>
+          </div>
         </div>
-
-        {/* Current Session Tag */}
-        <div className="hidden sm:flex items-center gap-2 text-xs text-slate-500 font-medium">
-          <span>الجلسة الحالية:</span>
-          <span className="font-mono font-bold text-emerald-800 bg-emerald-100/60 px-2 py-0.5 rounded-lg border border-emerald-200">
-            {currentSessionId}
-          </span>
-        </div>
-      </div>
+      )}
 
       {/* Main Content Area */}
       <main className="flex-1 pb-16">
@@ -148,6 +157,7 @@ export default function App() {
           <MainHomeQrView
             currentSessionId={currentSessionId}
             settings={settings}
+            isAdminLoggedIn={isAdminLoggedIn}
             onOpenCustomerViewOnDevice={() => setActiveView('customer')}
             onGenerateNewSession={(newSessionId) => {
               setCurrentSessionId(newSessionId);
@@ -161,10 +171,9 @@ export default function App() {
             sessionId={currentSessionId}
             settings={settings}
             onRefreshSession={() => {
-              // Force re-render with state refresh
               setCurrentSessionId((prev) => prev);
             }}
-            onGoToSimulator={() => setIsQrSimulatorOpen(true)}
+            onGoToSimulator={isAdminLoggedIn ? () => setIsQrSimulatorOpen(true) : undefined}
           />
         ) : (
           <AdminDashboard
