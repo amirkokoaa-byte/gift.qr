@@ -115,27 +115,14 @@ export const Header: React.FC<HeaderProps> = ({
             </div>
           </div>
 
-          {/* QR Simulator / Test Mode Button (Hidden for Customer) */}
-          {!isCustomerMode && onOpenQrSimulator && (
-            <button
-              id="qr-test-button"
-              onClick={onOpenQrSimulator}
-              title="محاكي مسح الرمز QR"
-              className="p-2 sm:px-3 sm:py-2 rounded-xl text-xs font-semibold bg-emerald-100/70 hover:bg-emerald-200/80 text-[#14382c] transition-all flex items-center gap-1.5 border border-emerald-300/60"
-            >
-              <QrCode className="w-4 h-4" />
-              <span className="hidden md:inline">محاكي الـ QR</span>
-            </button>
-          )}
-
-          {/* Admin Dashboard Gear Button (Hidden for Customer) */}
+          {/* Admin Dashboard Gear Button (In place of QR simulator) */}
           {!isCustomerMode && (
             <button
               id="admin-settings-gear-btn"
               onClick={onOpenAdminAuth}
               aria-label="لوحة تحكم المدير"
-              title="لوحة تحكم المدير (الرمز: 0000)"
-              className={`relative p-2.5 rounded-xl transition-all duration-200 border flex items-center justify-center ${
+              title="لوحة تحكم المدير"
+              className={`relative p-2.5 sm:p-2.5 rounded-xl transition-all duration-200 border flex items-center justify-center min-w-[40px] min-h-[40px] ${
                 activeView === 'admin'
                   ? 'bg-[#14382c] text-white border-[#14382c] shadow-md shadow-emerald-950/20'
                   : 'bg-white hover:bg-rose-50/80 text-[#14382c] border-emerald-900/15 shadow-2xs hover:border-rose-300'
@@ -145,6 +132,19 @@ export const Header: React.FC<HeaderProps> = ({
               {isAdminLoggedIn && (
                 <span className="absolute -top-1 -right-1 w-3 h-3 bg-emerald-500 border-2 border-white rounded-full"></span>
               )}
+            </button>
+          )}
+
+          {/* QR Simulator / Test Mode Button (ONLY shown when Admin is logged in with password) */}
+          {!isCustomerMode && isAdminLoggedIn && onOpenQrSimulator && (
+            <button
+              id="qr-test-button"
+              onClick={onOpenQrSimulator}
+              title="محاكي مسح الرمز QR"
+              className="p-2 sm:px-3 sm:py-2 rounded-xl text-xs font-semibold bg-emerald-100/80 hover:bg-emerald-200 text-[#14382c] transition-all flex items-center gap-1.5 border border-emerald-300 shadow-2xs"
+            >
+              <QrCode className="w-4 h-4" />
+              <span className="hidden md:inline">محاكي الـ QR</span>
             </button>
           )}
         </div>

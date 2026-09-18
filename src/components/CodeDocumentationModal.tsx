@@ -249,7 +249,7 @@ export async function claimGiftWithUniqueTransaction(sessionId, customerName, ph
             <div className="space-y-4">
               <h4 className="text-base font-bold text-emerald-400">خطوة 5: لوحة تحكم المدير وتصدير تقرير PDF (app/admin/page.jsx)</h4>
               <p className="text-slate-300 text-xs sm:text-sm">
-                لوحة تحكم كاملة محمية برمز 0000، تتضمن جدول عملاء متجاوب مع بحث وتصدير تقرير احترافي عبر jsPDF و jspdf-autotable.
+                لوحة تحكم كاملة محمية برمز مرور سري للإدارة، تتضمن جدول عملاء متجاوب مع بحث وتصدير تقرير احترافي عبر jsPDF و jspdf-autotable.
               </p>
               <p className="text-xs text-slate-400">
                 انظر المكون المنفذ في <code className="text-emerald-400">src/components/AdminDashboard.tsx</code> والمربوط مباشرة بالبيانات اللحظية.

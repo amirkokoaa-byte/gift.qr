@@ -6,6 +6,9 @@ interface AdminPasscodeModalProps {
   onClose: () => void;
   onSuccess: () => void;
   correctPasscode: string;
+  customTitle?: string;
+  customSubtitle?: string;
+  preventClose?: boolean;
 }
 
 export const AdminPasscodeModal: React.FC<AdminPasscodeModalProps> = ({
@@ -13,6 +16,9 @@ export const AdminPasscodeModal: React.FC<AdminPasscodeModalProps> = ({
   onClose,
   onSuccess,
   correctPasscode,
+  customTitle,
+  customSubtitle,
+  preventClose = false,
 }) => {
   const [passcode, setPasscode] = useState('');
   const [error, setError] = useState(false);
@@ -48,22 +54,24 @@ export const AdminPasscodeModal: React.FC<AdminPasscodeModalProps> = ({
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs animate-in fade-in duration-200">
       <div className="bg-white rounded-3xl max-w-sm w-full p-6 sm:p-8 border border-emerald-900/10 shadow-2xl text-center relative">
-        <button
-          onClick={onClose}
-          className="absolute top-4 left-4 p-2 text-slate-400 hover:text-slate-600 rounded-xl"
-        >
-          <X className="w-5 h-5" />
-        </button>
+        {!preventClose && (
+          <button
+            onClick={onClose}
+            className="absolute top-4 left-4 p-2 text-slate-400 hover:text-slate-600 rounded-xl"
+          >
+            <X className="w-5 h-5" />
+          </button>
+        )}
 
         <div className="w-16 h-16 mx-auto mb-4 rounded-2xl bg-emerald-50 text-[#14382c] border border-emerald-900/10 flex items-center justify-center shadow-inner">
           <KeyRound className="w-8 h-8" />
         </div>
 
         <h3 className="text-xl font-black text-[#14382c] mb-1">
-          دخول لوحة تحكم المدير
+          {customTitle || 'دخول لوحة تحكم المدير'}
         </h3>
         <p className="text-xs text-slate-500 mb-6">
-          أدخل رمز المرور السري (الرمز الافتراضي: 0000)
+          {customSubtitle || 'أدخل رمز المرور السري للإدارة'}
         </p>
 
         <form onSubmit={handleSubmit}>
@@ -89,7 +97,7 @@ export const AdminPasscodeModal: React.FC<AdminPasscodeModalProps> = ({
 
           {error && (
             <p className="text-xs font-bold text-rose-600 mb-4 animate-in fade-in">
-              رمز المرور غير صحيح! حاول مرة أخرى (الرمز الافتراضي: 0000)
+              رمز المرور غير صحيح! حاول مرة أخرى
             </p>
           )}
 

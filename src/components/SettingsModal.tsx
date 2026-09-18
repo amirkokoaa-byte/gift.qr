@@ -288,14 +288,14 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
               رمز دخول المدير (Admin Passcode)
             </label>
             <input
-              type="text"
+              type="password"
               id="settings-admin-passcode"
               value={adminPasscode}
               onChange={(e) => setAdminPasscode(e.target.value)}
-              placeholder="0000"
-              className="w-full px-4 py-2.5 rounded-xl text-sm border border-slate-200 font-mono focus:outline-hidden focus:border-emerald-600"
+              placeholder="••••"
+              className="w-full px-4 py-2.5 rounded-xl text-sm border border-slate-200 font-mono tracking-widest focus:outline-hidden focus:border-emerald-600"
             />
-            <p className="text-[11px] text-slate-400 mt-1">الرمز الافتراضي: 0000</p>
+            <p className="text-[11px] text-slate-400 mt-1">رمز مرور سري لحماية لوحة الإدارة والإعدادات</p>
           </div>
 
           {/* Firebase Custom Credentials (Accordion / Collapsible) */}

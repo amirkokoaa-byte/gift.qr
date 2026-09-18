@@ -23,6 +23,38 @@ export default function App() {
   const [isQrSimulatorOpen, setIsQrSimulatorOpen] = useState<boolean>(false);
   const [isCodeDocsOpen, setIsCodeDocsOpen] = useState<boolean>(false);
 
+  // Security Tamper Lock State
+  const [isTamperedLock, setIsTamperedLock] = useState<boolean>(false);
+  const [tamperReason, setTamperReason] = useState<string>('');
+
+  // Check if this device has already registered/claimed and if customer alters URL or attempts re-scan
+  const checkUrlSecurity = (targetSession?: string | null) => {
+    try {
+      const rawDeviceClaim = localStorage.getItem('softrose_device_claimed');
+      if (rawDeviceClaim) {
+        const deviceClaim = JSON.parse(rawDeviceClaim);
+        if (deviceClaim && deviceClaim.claimed) {
+          const currentParams = new URLSearchParams(window.location.search);
+          const activeSessionInUrl = targetSession !== undefined ? targetSession : currentParams.get('session');
+
+          // If the customer changed the session parameter or wiped it to scan again
+          if (activeSessionInUrl && activeSessionInUrl !== deviceClaim.sessionId) {
+            setTamperReason('تم تعديل رابط الجلسة أو محاولة عمل مسح جديد بعد تسجيل الاسم ورقم الهاتف مسبقاً من هذا الهاتف.');
+            setIsTamperedLock(true);
+            return true;
+          } else if (!activeSessionInUrl && !isAdminLoggedIn) {
+            setTamperReason('تمت إزالة رابط المشاركة من شريط المتصفح. لا يمكن المتابعة إلا بإدخال رمز مرور الإدارة.');
+            setIsTamperedLock(true);
+            return true;
+          }
+        }
+      }
+    } catch (e) {
+      console.warn('Security verify error:', e);
+    }
+    return false;
+  };
+
   // Load saved campaign settings
   useEffect(() => {
     getCampaignSettings().then((s) => setSettings(s));
@@ -33,6 +65,9 @@ export default function App() {
     const params = new URLSearchParams(window.location.search);
     const sessionParam = params.get('session');
     const viewParam = params.get('view');
+
+    // Run security check to prevent URL tampering or duplicate scans
+    checkUrlSecurity(sessionParam);
 
     if (sessionParam) {
       setCurrentSessionId(sessionParam);
@@ -48,6 +83,18 @@ export default function App() {
       setIsPasscodeModalOpen(true);
     }
   }, []);
+
+  // Real-time URL change listener (popstate / browser bar edits)
+  useEffect(() => {
+    const handleUrlChange = () => {
+      const params = new URLSearchParams(window.location.search);
+      const sessionParam = params.get('session');
+      checkUrlSecurity(sessionParam);
+    };
+
+    window.addEventListener('popstate', handleUrlChange);
+    return () => window.removeEventListener('popstate', handleUrlChange);
+  }, [isAdminLoggedIn]);
 
   const handleAdminAuthSuccess = () => {
     setIsAdminLoggedIn(true);
@@ -174,6 +221,14 @@ export default function App() {
               setCurrentSessionId((prev) => prev);
             }}
             onGoToSimulator={isAdminLoggedIn ? () => setIsQrSimulatorOpen(true) : undefined}
+            onClaimCompleted={(claim) => {
+              // Lock down on claim to prevent URL manipulation
+              checkUrlSecurity(claim.sessionId);
+            }}
+            onRequireAdminPasscode={(reason) => {
+              setTamperReason(reason);
+              setIsTamperedLock(true);
+            }}
           />
         ) : (
           <AdminDashboard
@@ -212,6 +267,26 @@ export default function App() {
         onClose={() => setIsPasscodeModalOpen(false)}
         onSuccess={handleAdminAuthSuccess}
         correctPasscode={settings.adminPasscode || '0000'}
+      />
+
+      {/* Security Tamper & Duplicate Scan Lockout Modal */}
+      <AdminPasscodeModal
+        isOpen={isTamperedLock}
+        onClose={() => {}}
+        preventClose={true}
+        customTitle="تم قفل الجلسة - مطلوب إذن الإدارة"
+        customSubtitle={
+          tamperReason ||
+          'تم تسجيل الاسم ورقم الهاتف مسبقاً من هذا الهاتف، أو تم تعديل رابط الجلسة في المتصفح. لا يمكن المتابعة إلا بإدخال رمز مرور الإدارة.'
+        }
+        correctPasscode={settings.adminPasscode || '0000'}
+        onSuccess={() => {
+          setIsTamperedLock(false);
+          setIsAdminLoggedIn(true);
+          try {
+            localStorage.removeItem('softrose_device_claimed');
+          } catch {}
+        }}
       />
 
       <SettingsModal

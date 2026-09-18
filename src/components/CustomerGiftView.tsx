@@ -9,6 +9,8 @@ interface CustomerGiftViewProps {
   settings: CampaignSettings;
   onRefreshSession?: () => void;
   onGoToSimulator?: () => void;
+  onClaimCompleted?: (claimData: { sessionId: string; customerName: string; phoneNumber: string; giftNumber: number }) => void;
+  onRequireAdminPasscode?: (reason: string) => void;
 }
 
 export const CustomerGiftView: React.FC<CustomerGiftViewProps> = ({
@@ -16,6 +18,8 @@ export const CustomerGiftView: React.FC<CustomerGiftViewProps> = ({
   settings,
   onRefreshSession,
   onGoToSimulator,
+  onClaimCompleted,
+  onRequireAdminPasscode,
 }) => {
   // Form State
   const [customerName, setCustomerName] = useState('');
@@ -43,6 +47,33 @@ export const CustomerGiftView: React.FC<CustomerGiftViewProps> = ({
     async function checkCurrentSession() {
       setIsCheckingSession(true);
       try {
+        // Check if this device has already claimed a gift previously
+        const rawDeviceClaim = localStorage.getItem('softrose_device_claimed');
+        if (rawDeviceClaim) {
+          try {
+            const deviceClaim = JSON.parse(rawDeviceClaim);
+            if (deviceClaim && deviceClaim.claimed) {
+              if (deviceClaim.sessionId === sessionId) {
+                // If it's the exact same session, restore their claimed gift card
+                setCustomerName(deviceClaim.customerName || '');
+                setPhoneNumber(deviceClaim.phoneNumber || '');
+                setFinalGiftNumber(deviceClaim.giftNumber || null);
+                setDisplayNumber(deviceClaim.giftNumber || null);
+                setIsClaimCompleted(true);
+              } else {
+                // Different session! The customer changed the link in the URL or scanned another QR code!
+                if (onRequireAdminPasscode) {
+                  onRequireAdminPasscode('تم تعديل رابط الجلسة أو محاولة إجراء مسح جديد بعد استلام الهدية مسبقاً من هذا الهاتف.');
+                }
+                if (isMounted) setIsCheckingSession(false);
+                return;
+              }
+            }
+          } catch (e) {
+            console.warn('Error reading device claim:', e);
+          }
+        }
+
         const session = await getSessionRecord(sessionId);
         if (isMounted) {
           if (session && session.status === 'used') {
@@ -168,6 +199,25 @@ export const CustomerGiftView: React.FC<CustomerGiftViewProps> = ({
         setFinalGiftNumber(allocatedGiftNumber);
         setIsSpinning(false);
         setIsClaimCompleted(true);
+
+        // Store claim on this device to protect against URL tampering and re-scanning
+        const claimPayload = {
+          claimed: true,
+          sessionId,
+          customerName: customerName.trim(),
+          phoneNumber: phoneNumber.trim(),
+          giftNumber: allocatedGiftNumber,
+          claimedAt: Date.now(),
+        };
+        try {
+          localStorage.setItem('softrose_device_claimed', JSON.stringify(claimPayload));
+        } catch (e) {
+          console.warn('Could not save device claim:', e);
+        }
+
+        if (onClaimCompleted) {
+          onClaimCompleted(claimPayload);
+        }
 
         // Trigger celebratory confetti effect!
         confetti({
