@@ -46,3 +46,10 @@ export interface GenerationResult {
   error?: string;
   isUsed?: boolean;
 }
+
+export interface RaffleWinnerRecord {
+  id: string;
+  customer: CustomerRecord;
+  wonAt: string;
+  wonAtMillis: number;
+}

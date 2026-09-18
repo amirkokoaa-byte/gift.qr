@@ -12,7 +12,7 @@ import {
 } from 'firebase/firestore';
 import { getStorage, ref, uploadString, getDownloadURL, type FirebaseStorage } from 'firebase/storage';
 import { getAuth, signInAnonymously } from 'firebase/auth';
-import { CustomerRecord, CampaignSettings, SessionRecord, GenerationResult } from '../types';
+import { CustomerRecord, CampaignSettings, SessionRecord, GenerationResult, RaffleWinnerRecord } from '../types';
 
 // Production Firebase Configuration for Soft Rose International
 export const DEFAULT_FIREBASE_CONFIG = {
@@ -40,6 +40,7 @@ const SETTINGS_STORAGE_KEY = 'softrose_campaign_settings';
 const CUSTOMERS_STORAGE_KEY = 'softrose_customers_records';
 const SESSIONS_STORAGE_KEY = 'softrose_qr_sessions';
 const NUMBERS_STORAGE_KEY = 'softrose_allocated_numbers';
+const RAFFLE_WINNERS_STORAGE_KEY = 'softrose_raffle_winners';
 
 let cachedApp: FirebaseApp | null = null;
 let cachedDb: Firestore | null = null;
@@ -982,5 +983,160 @@ export function resetAllCampaignData(): void {
   localStorage.removeItem(CUSTOMERS_STORAGE_KEY);
   localStorage.removeItem(SESSIONS_STORAGE_KEY);
   localStorage.removeItem(NUMBERS_STORAGE_KEY);
+  localStorage.removeItem(RAFFLE_WINNERS_STORAGE_KEY);
   window.dispatchEvent(new CustomEvent('softrose_data_updated'));
+}
+
+// -------------------------------------------------------------
+// Random Draw / Raffle Winners Management
+// -------------------------------------------------------------
+export function subscribeToRaffleWinners(callback: (winners: RaffleWinnerRecord[]) => void): () => void {
+  const { db, isFirebaseActive } = initFirebase();
+  let unsubFirestore: (() => void) | null = null;
+  let isCleanedUp = false;
+
+  const emitLocal = () => {
+    try {
+      const raw = localStorage.getItem(RAFFLE_WINNERS_STORAGE_KEY);
+      const list: RaffleWinnerRecord[] = raw ? JSON.parse(raw) : [];
+      list.sort((a, b) => b.wonAtMillis - a.wonAtMillis);
+      callback(list);
+    } catch {
+      callback([]);
+    }
+  };
+
+  if (isFirebaseActive && db) {
+    try {
+      const q = collection(db, 'raffle_winners');
+      unsubFirestore = onSnapshot(
+        q,
+        (snap) => {
+          if (isCleanedUp) return;
+          const list: RaffleWinnerRecord[] = [];
+          snap.forEach((d) => list.push({ id: d.id, ...(d.data() as any) }));
+
+          // Merge local in case some were saved offline
+          try {
+            const raw = localStorage.getItem(RAFFLE_WINNERS_STORAGE_KEY);
+            if (raw) {
+              const localList: RaffleWinnerRecord[] = JSON.parse(raw);
+              for (const loc of localList) {
+                if (!list.some((w) => w.id === loc.id || (w.customer?.id && w.customer.id === loc.customer?.id))) {
+                  list.push(loc);
+                }
+              }
+            }
+          } catch {}
+
+          list.sort((a, b) => b.wonAtMillis - a.wonAtMillis);
+          callback(list);
+        },
+        (err) => {
+          console.warn('Firestore raffle winners snapshot error:', err);
+          emitLocal();
+        }
+      );
+    } catch (err) {
+      console.warn('subscribeToRaffleWinners firestore error:', err);
+      emitLocal();
+    }
+  } else {
+    emitLocal();
+  }
+
+  const handleUpdate = () => {
+    if (isCleanedUp) return;
+    emitLocal();
+  };
+
+  window.addEventListener('storage', handleUpdate);
+  window.addEventListener('softrose_data_updated', handleUpdate);
+
+  return () => {
+    isCleanedUp = true;
+    if (unsubFirestore) unsubFirestore();
+    window.removeEventListener('storage', handleUpdate);
+    window.removeEventListener('softrose_data_updated', handleUpdate);
+  };
+}
+
+export async function addRaffleWinner(customer: CustomerRecord): Promise<RaffleWinnerRecord> {
+  const winnerRecord: RaffleWinnerRecord = {
+    id: 'winner_' + Date.now() + '_' + Math.random().toString(36).substring(2, 7),
+    customer,
+    wonAt: new Date().toISOString(),
+    wonAtMillis: Date.now(),
+  };
+
+  // 1. Save locally
+  try {
+    const raw = localStorage.getItem(RAFFLE_WINNERS_STORAGE_KEY);
+    const list: RaffleWinnerRecord[] = raw ? JSON.parse(raw) : [];
+    // Insert at front
+    list.unshift(winnerRecord);
+    localStorage.setItem(RAFFLE_WINNERS_STORAGE_KEY, JSON.stringify(list));
+  } catch (e) {
+    console.warn('Error saving local raffle winner:', e);
+  }
+
+  window.dispatchEvent(new CustomEvent('softrose_data_updated'));
+
+  // 2. Save in Firestore if active
+  const { db, isFirebaseActive } = initFirebase();
+  if (isFirebaseActive && db) {
+    try {
+      await setDoc(doc(db, 'raffle_winners', winnerRecord.id), winnerRecord);
+    } catch (err) {
+      console.warn('Firestore addRaffleWinner error:', err);
+    }
+  }
+
+  return winnerRecord;
+}
+
+export async function deleteRaffleWinner(winnerId: string): Promise<void> {
+  // 1. Local
+  try {
+    const raw = localStorage.getItem(RAFFLE_WINNERS_STORAGE_KEY);
+    if (raw) {
+      const list: RaffleWinnerRecord[] = JSON.parse(raw);
+      const filtered = list.filter((w) => w.id !== winnerId);
+      localStorage.setItem(RAFFLE_WINNERS_STORAGE_KEY, JSON.stringify(filtered));
+    }
+  } catch (e) {
+    console.warn('Error deleting local winner:', e);
+  }
+
+  window.dispatchEvent(new CustomEvent('softrose_data_updated'));
+
+  // 2. Firestore
+  const { db, isFirebaseActive } = initFirebase();
+  if (isFirebaseActive && db) {
+    try {
+      await deleteDoc(doc(db, 'raffle_winners', winnerId));
+    } catch (err) {
+      console.warn('Firestore deleteRaffleWinner error:', err);
+    }
+  }
+}
+
+export async function clearAllRaffleWinners(): Promise<void> {
+  localStorage.removeItem(RAFFLE_WINNERS_STORAGE_KEY);
+  window.dispatchEvent(new CustomEvent('softrose_data_updated'));
+
+  const { db, isFirebaseActive } = initFirebase();
+  if (isFirebaseActive && db) {
+    try {
+      // In Firestore, get winners and delete each
+      const snap = await onSnapshot(collection(db, 'raffle_winners'), (snapshot) => {
+        snapshot.forEach((d) => {
+          deleteDoc(doc(db, 'raffle_winners', d.id)).catch(() => {});
+        });
+      });
+      setTimeout(() => snap(), 2000);
+    } catch (e) {
+      console.warn('Error clearing firestore winners:', e);
+    }
+  }
 }

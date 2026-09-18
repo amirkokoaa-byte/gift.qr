@@ -1,8 +1,10 @@
 import React, { useState, useEffect } from 'react';
+import { Trophy } from 'lucide-react';
 import { Header } from './components/Header';
 import { CustomerGiftView } from './components/CustomerGiftView';
 import { AdminDashboard } from './components/AdminDashboard';
 import { MainHomeQrView } from './components/MainHomeQrView';
+import { RandomWinnerSelectorView } from './components/RandomWinnerSelectorView';
 import { SettingsModal } from './components/SettingsModal';
 import { AdminPasscodeModal } from './components/AdminPasscodeModal';
 import { QRCodeTesterModal } from './components/QRCodeTesterModal';
@@ -13,7 +15,7 @@ import { DEFAULT_SETTINGS, getCampaignSettings, createNewSessionId } from './ser
 export default function App() {
   const [settings, setSettings] = useState<CampaignSettings>(DEFAULT_SETTINGS);
   const [currentSessionId, setCurrentSessionId] = useState<string>(() => createNewSessionId());
-  const [activeView, setActiveView] = useState<'home_qr' | 'customer' | 'admin'>('home_qr');
+  const [activeView, setActiveView] = useState<'home_qr' | 'customer' | 'admin' | 'raffle'>('home_qr');
   const [isCustomerMode, setIsCustomerMode] = useState<boolean>(false);
 
   // Modal controls
@@ -96,10 +98,14 @@ export default function App() {
     return () => window.removeEventListener('popstate', handleUrlChange);
   }, [isAdminLoggedIn]);
 
-  const handleAdminAuthSuccess = () => {
+  const handleAdminAuthSuccess = (destination?: 'admin' | 'raffle') => {
     setIsAdminLoggedIn(true);
     setIsPasscodeModalOpen(false);
-    setActiveView('admin');
+    if (destination === 'raffle') {
+      setActiveView('raffle');
+    } else {
+      setActiveView('admin');
+    }
   };
 
   const handleOpenAdmin = () => {
@@ -177,6 +183,20 @@ export default function App() {
             </button>
 
             <button
+              id="tab-raffle-view-btn"
+              onClick={() => setActiveView('raffle')}
+              className={`px-3.5 py-1.5 rounded-xl transition-all flex items-center gap-1.5 ${
+                activeView === 'raffle'
+                  ? 'bg-gradient-to-r from-amber-600 to-amber-700 text-white shadow-xs'
+                  : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100/60'
+              }`}
+            >
+              <Trophy className="w-3.5 h-3.5 text-amber-300" />
+              <span>الاختيار العشوائي</span>
+            </button>
+
+            <button
+              id="tab-admin-view-btn"
               onClick={() => setActiveView('admin')}
               className={`px-3.5 py-1.5 rounded-xl transition-all flex items-center gap-1.5 ${
                 activeView === 'admin'
@@ -228,6 +248,12 @@ export default function App() {
               setIsTamperedLock(true);
             }}
           />
+        ) : activeView === 'raffle' ? (
+          <RandomWinnerSelectorView
+            settings={settings}
+            onGoToAdmin={() => setActiveView('admin')}
+            onGoToHomeQr={() => setActiveView('home_qr')}
+          />
         ) : (
           <AdminDashboard
             settings={settings}
@@ -235,6 +261,7 @@ export default function App() {
             onOpenQrSimulator={() => setIsQrSimulatorOpen(true)}
             onOpenCodeDocs={() => setIsCodeDocsOpen(true)}
             onLogout={handleLogoutAdmin}
+            onOpenRaffle={() => setActiveView('raffle')}
           />
         )}
       </main>

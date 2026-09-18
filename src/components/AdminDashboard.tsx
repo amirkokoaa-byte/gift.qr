@@ -15,6 +15,7 @@ import {
   Edit3,
   ExternalLink,
   Sparkles,
+  Trophy,
 } from 'lucide-react';
 import { CustomerRecord, CampaignSettings } from '../types';
 import {
@@ -34,6 +35,7 @@ interface AdminDashboardProps {
   onOpenQrSimulator: () => void;
   onOpenCodeDocs: () => void;
   onLogout: () => void;
+  onOpenRaffle?: () => void;
 }
 
 export const AdminDashboard: React.FC<AdminDashboardProps> = ({
@@ -42,6 +44,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   onOpenQrSimulator,
   onOpenCodeDocs,
   onLogout,
+  onOpenRaffle,
 }) => {
   const [customers, setCustomers] = useState<CustomerRecord[]>([]);
   const [searchTerm, setSearchTerm] = useState('');
@@ -202,6 +205,17 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
             <RefreshCw className={`w-3.5 h-3.5 text-emerald-800 ${isSyncingCloud ? 'animate-spin' : ''}`} />
             <span>{isSyncingCloud ? 'جاري المزامنة...' : 'مزامنة السحابة'}</span>
           </button>
+
+          {onOpenRaffle && (
+            <button
+              id="admin-open-raffle-btn"
+              onClick={onOpenRaffle}
+              className="px-4 py-2.5 rounded-xl bg-gradient-to-r from-amber-500 via-amber-600 to-amber-500 hover:from-amber-600 hover:to-amber-700 text-white text-xs sm:text-sm font-black shadow-xs hover:shadow-md transition-all flex items-center gap-2 active:scale-95"
+            >
+              <Trophy className="w-4 h-4 text-amber-100 animate-bounce" />
+              <span>الاختيار العشوائي (السحب)</span>
+            </button>
+          )}
 
           <button
             id="admin-settings-modal-btn"

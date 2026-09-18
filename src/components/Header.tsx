@@ -7,8 +7,8 @@ interface HeaderProps {
   onOpenAdminAuth: () => void;
   isAdminLoggedIn: boolean;
   onLogoutAdmin?: () => void;
-  activeView: 'home_qr' | 'customer' | 'admin';
-  onNavigate: (view: 'home_qr' | 'customer' | 'admin') => void;
+  activeView: 'home_qr' | 'customer' | 'admin' | 'raffle';
+  onNavigate: (view: 'home_qr' | 'customer' | 'admin' | 'raffle') => void;
   onOpenQrSimulator?: () => void;
   isCustomerMode?: boolean;
 }

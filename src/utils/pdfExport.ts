@@ -1,7 +1,7 @@
 import html2canvas from 'html2canvas';
 import jsPDF from 'jspdf';
 import QRCode from 'qrcode';
-import { CustomerRecord, CampaignSettings } from '../types';
+import { CustomerRecord, CampaignSettings, RaffleWinnerRecord } from '../types';
 
 /**
  * Clean helper to trigger a bulletproof PDF download that works inside
@@ -335,6 +335,146 @@ export async function exportCustomerVoucherPDF(
 
     const safeName = customer.customerName.replace(/[/\\?%*:|"<>]/g, '_').trim();
     const filename = `بطاقة_هدية_${safeName}_${customer.giftNumber}.pdf`;
+    downloadPdfBlob(pdf, filename);
+  } finally {
+    if (document.body.contains(container)) {
+      document.body.removeChild(container);
+    }
+  }
+}
+
+/**
+ * Generates and downloads the Official Raffle Winners Report PDF.
+ */
+export async function exportWinnersReportPDF(
+  winners: RaffleWinnerRecord[],
+  settings: CampaignSettings
+): Promise<void> {
+  if (winners.length === 0) {
+    throw new Error('لا يوجد فائزين مسجلين في السحب لتصديرهم حالياً.');
+  }
+
+  const container = document.createElement('div');
+  container.style.position = 'fixed';
+  container.style.left = '-99999px';
+  container.style.top = '0';
+  container.style.width = '1000px';
+  container.style.backgroundColor = '#ffffff';
+  container.style.color = '#1e293b';
+  container.style.fontFamily = 'system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
+  container.style.padding = '36px';
+  container.style.direction = 'rtl';
+  container.style.zIndex = '-9999';
+
+  const rowsHtml = winners
+    .map(
+      (w, i) => `
+      <tr style="background-color: ${i % 2 === 0 ? '#ffffff' : '#f8fafc'}; border-bottom: 1px solid #e2e8f0;">
+        <td style="padding: 12px 14px; text-align: center; font-weight: bold; color: #64748b; font-family: monospace;">${i + 1}</td>
+        <td style="padding: 12px 14px; font-weight: 900; color: #14382c; font-size: 15px;">${escapeHtml(w.customer.customerName)}</td>
+        <td style="padding: 12px 14px; font-family: monospace; color: #334155; font-size: 13px; text-align: left;" dir="ltr">${escapeHtml(w.customer.phoneNumber)}</td>
+        <td style="padding: 12px 14px; text-align: center;">
+          <span style="display: inline-block; padding: 4px 14px; border-radius: 8px; background-color: #ecfdf5; color: #065f46; font-weight: 900; font-family: monospace; font-size: 16px; border: 1px solid #a7f3d0;">
+            #${w.customer.giftNumber}
+          </span>
+        </td>
+        <td style="padding: 12px 14px; color: #475569; font-size: 13px;">
+          ${escapeHtml(new Date(w.wonAt).toLocaleString('ar-EG'))}
+        </td>
+        <td style="padding: 12px 14px; text-align: center; color: #047857; font-weight: bold; font-size: 13px;">
+          🏆 فائز بالسحب
+        </td>
+      </tr>
+    `
+    )
+    .join('');
+
+  container.innerHTML = `
+    <div style="border-bottom: 3px solid #14382c; padding-bottom: 20px; margin-bottom: 24px; display: flex; align-items: center; justify-content: space-between;">
+      <div style="display: flex; align-items: center; gap: 16px;">
+        <div style="width: 64px; height: 64px; border-radius: 16px; background-color: #14382c; color: #ffffff; display: flex; align-items: center; justify-content: center; font-size: 30px;">
+          🏆
+        </div>
+        <div>
+          <h1 style="margin: 0; font-size: 24px; font-weight: 900; color: #14382c;">
+            ${escapeHtml(settings.companyName || 'شركة سوفت روز انترناشيونال')}
+          </h1>
+          <p style="margin: 4px 0 0 0; font-size: 14px; color: #047857; font-weight: bold;">
+            سجل الفائزين الرسمي في القرعة والسحب العشوائي • Official Raffle Winners
+          </p>
+        </div>
+      </div>
+      <div style="text-align: left;" dir="ltr">
+        <div style="font-size: 12px; font-family: monospace; color: #64748b; font-weight: bold;">
+          Export Date: ${new Date().toLocaleDateString('ar-EG')} - ${new Date().toLocaleTimeString('ar-EG')}
+        </div>
+        <div style="font-size: 13px; font-weight: bold; color: #14382c; margin-top: 4px;">
+          إجمالي الفائزين: ${winners.length} فائز
+        </div>
+      </div>
+    </div>
+
+    <!-- Table -->
+    <table style="width: 100%; border-collapse: collapse; text-align: right; font-size: 13px; border: 1px solid #cbd5e1;">
+      <thead>
+        <tr style="background-color: #14382c; color: #ffffff;">
+          <th style="padding: 12px 14px; text-align: center; width: 50px;">#</th>
+          <th style="padding: 12px 14px;">اسم العميل الفائز</th>
+          <th style="padding: 12px 14px;">رقم الهاتف</th>
+          <th style="padding: 12px 14px; text-align: center;">رقم الهدية المسجل</th>
+          <th style="padding: 12px 14px;">تاريخ وساعة الفوز</th>
+          <th style="padding: 12px 14px; text-align: center;">الحالة</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${rowsHtml}
+      </tbody>
+    </table>
+
+    <div style="margin-top: 32px; padding-top: 16px; border-top: 1px solid #cbd5e1; display: flex; align-items: center; justify-content: space-between; font-size: 12px; color: #64748b;">
+      <div>تم سحب وتوثيق هذه النتائج رسمياً من نظام سوفت روز انترناشيونال</div>
+      <div dir="ltr">Soft Rose International • Official Winners Record</div>
+    </div>
+  `;
+
+  document.body.appendChild(container);
+
+  try {
+    const canvas = await html2canvas(container, {
+      scale: 2,
+      useCORS: true,
+      backgroundColor: '#ffffff',
+      logging: false,
+      windowWidth: 1100,
+    });
+
+    const imgData = canvas.toDataURL('image/jpeg', 0.95);
+    const pdf = new jsPDF({
+      orientation: 'landscape',
+      unit: 'mm',
+      format: 'a4',
+    });
+
+    const pdfWidth = pdf.internal.pageSize.getWidth();
+    const pdfHeight = pdf.internal.pageSize.getHeight();
+
+    const imgProps = pdf.getImageProperties(imgData);
+    const imgHeight = (imgProps.height * pdfWidth) / imgProps.width;
+
+    let heightLeft = imgHeight;
+    let position = 0;
+
+    pdf.addImage(imgData, 'JPEG', 0, position, pdfWidth, imgHeight);
+    heightLeft -= pdfHeight;
+
+    while (heightLeft > 0) {
+      position = heightLeft - imgHeight;
+      pdf.addPage();
+      pdf.addImage(imgData, 'JPEG', 0, position, pdfWidth, imgHeight);
+      heightLeft -= pdfHeight;
+    }
+
+    const filename = `تقرير_الفائزين_سوفت_روز_${Date.now()}.pdf`;
     downloadPdfBlob(pdf, filename);
   } finally {
     if (document.body.contains(container)) {
