@@ -7,9 +7,11 @@ import {
   onSnapshot,
   getDoc,
   setDoc,
+  deleteDoc,
   type Firestore,
 } from 'firebase/firestore';
 import { getStorage, ref, uploadString, getDownloadURL, type FirebaseStorage } from 'firebase/storage';
+import { getAuth, signInAnonymously } from 'firebase/auth';
 import { CustomerRecord, CampaignSettings, SessionRecord, GenerationResult } from '../types';
 
 // Production Firebase Configuration for Soft Rose International
@@ -43,6 +45,26 @@ let cachedApp: FirebaseApp | null = null;
 let cachedDb: Firestore | null = null;
 let cachedStorage: FirebaseStorage | null = null;
 
+// Firebase Cloud Health Status Tracking
+export type FirebaseHealthStatus = 'checking' | 'connected' | 'permission_denied' | 'error' | 'local_only';
+let currentHealthStatus: FirebaseHealthStatus = 'checking';
+let lastHealthErrorDetails: string = '';
+let healthListeners: ((status: FirebaseHealthStatus, details: string) => void)[] = [];
+
+export function subscribeToFirebaseHealth(cb: (status: FirebaseHealthStatus, details: string) => void): () => void {
+  healthListeners.push(cb);
+  cb(currentHealthStatus, lastHealthErrorDetails);
+  return () => {
+    healthListeners = healthListeners.filter((l) => l !== cb);
+  };
+}
+
+function updateHealthStatus(status: FirebaseHealthStatus, details: string = '') {
+  currentHealthStatus = status;
+  lastHealthErrorDetails = details;
+  healthListeners.forEach((l) => l(status, details));
+}
+
 // Initialize Firebase dynamically if config is provided
 export function initFirebase(customConfig?: CampaignSettings['firebaseConfig']): {
   db: Firestore | null;
@@ -52,6 +74,7 @@ export function initFirebase(customConfig?: CampaignSettings['firebaseConfig']):
   try {
     const config = customConfig || getStoredFirebaseConfig();
     if (!config || !config.apiKey || !config.projectId) {
+      updateHealthStatus('local_only', 'لم يتم ضبط إعدادات Firebase');
       return { db: null, storage: null, isFirebaseActive: false };
     }
 
@@ -68,9 +91,24 @@ export function initFirebase(customConfig?: CampaignSettings['firebaseConfig']):
       cachedStorage = getStorage(cachedApp);
     }
 
+    // Try signing in anonymously if enabled in project
+    if (cachedApp) {
+      try {
+        const auth = getAuth(cachedApp);
+        if (!auth.currentUser) {
+          signInAnonymously(auth).catch(() => {
+            // Anonymous auth might not be enabled yet in console, which is fine if rules are open
+          });
+        }
+      } catch (authErr) {
+        // Ignore auth error
+      }
+    }
+
     return { db: cachedDb, storage: cachedStorage, isFirebaseActive: true };
-  } catch (error) {
+  } catch (error: any) {
     console.warn('Firebase initialization note (using local fallback):', error);
+    updateHealthStatus('error', error?.message || 'خطأ في تهيئة Firebase');
     return { db: null, storage: null, isFirebaseActive: false };
   }
 }
@@ -444,6 +482,7 @@ export function subscribeToCustomers(callback: (customers: CustomerRecord[]) => 
       const unsubscribe = onSnapshot(
         q,
         (snap) => {
+          updateHealthStatus('connected', 'متصل بالسحابة (Firebase Connected)');
           const list: CustomerRecord[] = [];
           snap.forEach((d) => list.push({ id: d.id, ...(d.data() as any) }));
 
@@ -453,7 +492,7 @@ export function subscribeToCustomers(callback: (customers: CustomerRecord[]) => 
             if (rawLocal) {
               const localList: CustomerRecord[] = JSON.parse(rawLocal);
               for (const loc of localList) {
-                if (!list.some((c) => c.id === loc.id || c.sessionId === loc.sessionId)) {
+                if (!list.some((c) => c.id === loc.id || (loc.sessionId && c.sessionId === loc.sessionId))) {
                   list.push(loc);
                 }
               }
@@ -464,15 +503,23 @@ export function subscribeToCustomers(callback: (customers: CustomerRecord[]) => 
           list.sort((a, b) => (b.claimedAtMillis || 0) - (a.claimedAtMillis || 0));
           callback(list);
         },
-        (error) => {
+        (error: any) => {
           console.warn('Firestore snapshot error, falling back to local:', error);
+          if (error?.code === 'permission-denied') {
+            updateHealthStatus('permission_denied', 'قواعد Firestore في Firebase Console مقفلة وترفض القراءة والكتابة (permission-denied)');
+          } else {
+            updateHealthStatus('error', error?.message || 'خطأ في الاتصال بقاعدة بيانات Firebase');
+          }
           loadLocalCustomers(callback);
         }
       );
       return unsubscribe;
-    } catch (e) {
+    } catch (e: any) {
       console.warn('Cannot establish Firestore snapshot, using local listener:', e);
+      updateHealthStatus('error', e?.message || 'تعذر بدء مراقبة قاعدة البيانات');
     }
+  } else {
+    updateHealthStatus('local_only', 'يعمل في الوضع المحلي');
   }
 
   // Local storage listener
@@ -488,22 +535,266 @@ export function subscribeToCustomers(callback: (customers: CustomerRecord[]) => 
 }
 
 // Upload any records stored in localStorage into Firestore cloud
-export async function syncLocalCustomersToFirestore(): Promise<void> {
+export async function syncLocalCustomersToFirestore(): Promise<number> {
   const { db, isFirebaseActive } = initFirebase();
-  if (!isFirebaseActive || !db) return;
+  if (!isFirebaseActive || !db) return 0;
 
+  let count = 0;
   try {
     const raw = localStorage.getItem(CUSTOMERS_STORAGE_KEY);
-    if (!raw) return;
+    if (!raw) return 0;
     const localCustomers: CustomerRecord[] = JSON.parse(raw);
     for (const cust of localCustomers) {
-      if (cust.sessionId) {
+      if (cust.sessionId || cust.customerName) {
         const cRef = cust.id ? doc(db, 'customers', cust.id) : doc(collection(db, 'customers'));
         await setDoc(cRef, cust, { merge: true });
+        count++;
       }
     }
-  } catch (err) {
+    if (count > 0) {
+      updateHealthStatus('connected', 'تم مزامنة السجلات بنجاح مع السحابة');
+    }
+  } catch (err: any) {
     console.warn('Sync local customers to firestore warning:', err);
+    if (err?.code === 'permission-denied') {
+      updateHealthStatus('permission_denied', 'قواعد Firestore في Firebase Console مقفلة (permission-denied)');
+    }
+  }
+  return count;
+}
+
+// Manual Test & Cloud Sync Trigger for the Admin
+export async function testAndSyncCloudData(): Promise<{
+  success: boolean;
+  status: FirebaseHealthStatus;
+  message: string;
+  count: number;
+}> {
+  const { db, isFirebaseActive } = initFirebase();
+  if (!isFirebaseActive || !db) {
+    updateHealthStatus('local_only', 'لم يتم ضبط إعدادات Firebase');
+    return {
+      success: false,
+      status: 'local_only',
+      message: 'لم يتم العثور على إعدادات مشروع Firebase.',
+      count: 0,
+    };
+  }
+
+  try {
+    // Test write & read to verify rules
+    const testRef = doc(db, 'campaign_metadata', 'connection_probe');
+    await setDoc(testRef, { lastPing: new Date().toISOString() }, { merge: true });
+    
+    // If successful, push local records to cloud
+    const syncedCount = await syncLocalCustomersToFirestore();
+    updateHealthStatus('connected', 'قاعدة البيانات السحابية متصلة ومفتوحة بنجاح!');
+    
+    window.dispatchEvent(new CustomEvent('softrose_data_updated'));
+    return {
+      success: true,
+      status: 'connected',
+      message: `تم الاتصال بالسحابة بنجاح! تم رفع ومزامنة ${syncedCount} من السجلات. ستظهر البيانات الآن فوراً على الكمبيوتر وكافة الأجهزة.`,
+      count: syncedCount,
+    };
+  } catch (err: any) {
+    if (err?.code === 'permission-denied') {
+      updateHealthStatus('permission_denied', 'قواعد Firestore ترفض الوصول (permission-denied)');
+      return {
+        success: false,
+        status: 'permission_denied',
+        message: 'لا تزال قواعد الأمان في Firebase Console مقفلة (permission-denied). يرجى فتح تبويب Rules وتعيين allow read, write: if true; ثم الضغط على Publish.',
+        count: 0,
+      };
+    }
+    updateHealthStatus('error', err?.message || 'فشل الاتصال بـ Firebase');
+    return {
+      success: false,
+      status: 'error',
+      message: `فشل الاتصال: ${err?.message || 'خطأ غير معروف'}`,
+      count: 0,
+    };
+  }
+}
+
+// -------------------------------------------------------------
+// Update Existing Customer Record (Edit in Modal)
+// -------------------------------------------------------------
+export async function updateCustomerRecord(
+  customerId: string,
+  updates: {
+    customerName: string;
+    phoneNumber: string;
+    giftNumber: number;
+  },
+  oldGiftNumber?: number
+): Promise<{ success: boolean; error?: string }> {
+  try {
+    // 1. Update in Local Storage
+    const rawCustomers = localStorage.getItem(CUSTOMERS_STORAGE_KEY);
+    let customers: CustomerRecord[] = rawCustomers ? JSON.parse(rawCustomers) : [];
+    let targetSessionId = '';
+
+    customers = customers.map((c) => {
+      if (c.id === customerId) {
+        targetSessionId = c.sessionId;
+        return {
+          ...c,
+          customerName: updates.customerName.trim(),
+          phoneNumber: updates.phoneNumber.trim(),
+          giftNumber: updates.giftNumber,
+        };
+      }
+      return c;
+    });
+    localStorage.setItem(CUSTOMERS_STORAGE_KEY, JSON.stringify(customers));
+
+    // 2. Adjust allocated numbers if gift number changed
+    if (oldGiftNumber !== undefined && oldGiftNumber !== updates.giftNumber) {
+      const rawNumbers = localStorage.getItem(NUMBERS_STORAGE_KEY);
+      const allocated: Record<string, boolean> = rawNumbers ? JSON.parse(rawNumbers) : {};
+      delete allocated[String(oldGiftNumber)];
+      allocated[String(updates.giftNumber)] = true;
+      localStorage.setItem(NUMBERS_STORAGE_KEY, JSON.stringify(allocated));
+    }
+
+    // 3. Update Session record in Local Storage
+    if (targetSessionId) {
+      const rawSessions = localStorage.getItem(SESSIONS_STORAGE_KEY);
+      if (rawSessions) {
+        const sessions: Record<string, SessionRecord> = JSON.parse(rawSessions);
+        if (sessions[targetSessionId]) {
+          sessions[targetSessionId] = {
+            ...sessions[targetSessionId],
+            claimedBy: {
+              name: updates.customerName.trim(),
+              phone: updates.phoneNumber.trim(),
+              giftNumber: updates.giftNumber,
+              timestamp: sessions[targetSessionId].claimedBy?.timestamp || new Date().toISOString(),
+            },
+          };
+          localStorage.setItem(SESSIONS_STORAGE_KEY, JSON.stringify(sessions));
+        }
+      }
+    }
+
+    // 4. Update in Cloud Firestore if available
+    const { db, isFirebaseActive } = initFirebase();
+    if (isFirebaseActive && db) {
+      try {
+        const customerRef = doc(db, 'customers', customerId);
+        await setDoc(
+          customerRef,
+          {
+            customerName: updates.customerName.trim(),
+            phoneNumber: updates.phoneNumber.trim(),
+            giftNumber: updates.giftNumber,
+          },
+          { merge: true }
+        );
+
+        if (targetSessionId) {
+          const sessionRef = doc(db, 'sessions', targetSessionId);
+          await setDoc(
+            sessionRef,
+            {
+              claimedBy: {
+                name: updates.customerName.trim(),
+                phone: updates.phoneNumber.trim(),
+                giftNumber: updates.giftNumber,
+              },
+            },
+            { merge: true }
+          );
+        }
+
+        if (oldGiftNumber !== undefined && oldGiftNumber !== updates.giftNumber) {
+          const registryRef = doc(db, 'campaign_metadata', 'allocated_numbers_registry');
+          const snap = await getDoc(registryRef);
+          let map: Record<string, boolean> = {};
+          if (snap.exists()) {
+            map = snap.data()?.allocated || {};
+          }
+          delete map[String(oldGiftNumber)];
+          map[String(updates.giftNumber)] = true;
+          await setDoc(registryRef, { allocated: map, lastUpdated: new Date().toISOString() }, { merge: true });
+        }
+      } catch (cloudErr) {
+        console.warn('Firestore update warning:', cloudErr);
+      }
+    }
+
+    window.dispatchEvent(new CustomEvent('softrose_data_updated'));
+    return { success: true };
+  } catch (err: any) {
+    console.error('Error updating customer record:', err);
+    return { success: false, error: err?.message || 'فشل تحديث بيانات العميل.' };
+  }
+}
+
+// -------------------------------------------------------------
+// Delete Customer Record Helper
+// -------------------------------------------------------------
+export async function deleteCustomerRecord(
+  customerId: string,
+  giftNumber?: number,
+  sessionId?: string
+): Promise<{ success: boolean; error?: string }> {
+  try {
+    // 1. Remove from Local Storage
+    const rawCustomers = localStorage.getItem(CUSTOMERS_STORAGE_KEY);
+    if (rawCustomers) {
+      const customers: CustomerRecord[] = JSON.parse(rawCustomers);
+      const filtered = customers.filter((c) => c.id !== customerId);
+      localStorage.setItem(CUSTOMERS_STORAGE_KEY, JSON.stringify(filtered));
+    }
+
+    // 2. Free allocated number
+    if (giftNumber !== undefined) {
+      const rawNumbers = localStorage.getItem(NUMBERS_STORAGE_KEY);
+      if (rawNumbers) {
+        const allocated: Record<string, boolean> = JSON.parse(rawNumbers);
+        delete allocated[String(giftNumber)];
+        localStorage.setItem(NUMBERS_STORAGE_KEY, JSON.stringify(allocated));
+      }
+    }
+
+    // 3. Reset session
+    if (sessionId) {
+      const rawSessions = localStorage.getItem(SESSIONS_STORAGE_KEY);
+      if (rawSessions) {
+        const sessions: Record<string, SessionRecord> = JSON.parse(rawSessions);
+        if (sessions[sessionId]) {
+          sessions[sessionId].status = 'active';
+          delete sessions[sessionId].claimedBy;
+          localStorage.setItem(SESSIONS_STORAGE_KEY, JSON.stringify(sessions));
+        }
+      }
+    }
+
+    // 4. Update in Cloud Firestore
+    const { db, isFirebaseActive } = initFirebase();
+    if (isFirebaseActive && db) {
+      try {
+        await deleteDoc(doc(db, 'customers', customerId));
+        if (giftNumber !== undefined) {
+          const registryRef = doc(db, 'campaign_metadata', 'allocated_numbers_registry');
+          const snap = await getDoc(registryRef);
+          if (snap.exists()) {
+            const map = snap.data()?.allocated || {};
+            delete map[String(giftNumber)];
+            await setDoc(registryRef, { allocated: map, lastUpdated: new Date().toISOString() }, { merge: true });
+          }
+        }
+      } catch (e) {
+        console.warn('Firestore delete error:', e);
+      }
+    }
+
+    window.dispatchEvent(new CustomEvent('softrose_data_updated'));
+    return { success: true };
+  } catch (err: any) {
+    return { success: false, error: err?.message || 'فشل حذف السجل.' };
   }
 }
 
