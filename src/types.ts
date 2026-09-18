@@ -28,7 +28,9 @@ export interface CampaignSettings {
 
 export interface SessionRecord {
   sessionId: string;
-  status: 'active' | 'used';
+  status: 'active' | 'scanned' | 'used';
+  scannedAt?: string;
+  scannedAtMillis?: number;
   claimedBy?: {
     name: string;
     phone: string;

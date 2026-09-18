@@ -8,11 +8,11 @@ import { AdminPasscodeModal } from './components/AdminPasscodeModal';
 import { QRCodeTesterModal } from './components/QRCodeTesterModal';
 import { CodeDocumentationModal } from './components/CodeDocumentationModal';
 import { CampaignSettings } from './types';
-import { DEFAULT_SETTINGS, getCampaignSettings } from './services/firebase';
+import { DEFAULT_SETTINGS, getCampaignSettings, createNewSessionId } from './services/firebase';
 
 export default function App() {
   const [settings, setSettings] = useState<CampaignSettings>(DEFAULT_SETTINGS);
-  const [currentSessionId, setCurrentSessionId] = useState<string>('sr_booth_gift_1');
+  const [currentSessionId, setCurrentSessionId] = useState<string>(() => createNewSessionId());
   const [activeView, setActiveView] = useState<'home_qr' | 'customer' | 'admin'>('home_qr');
   const [isCustomerMode, setIsCustomerMode] = useState<boolean>(false);
 
@@ -208,8 +208,6 @@ export default function App() {
             onOpenCustomerViewOnDevice={() => setActiveView('customer')}
             onGenerateNewSession={(newSessionId) => {
               setCurrentSessionId(newSessionId);
-              const newUrl = `${window.location.pathname}?session=${encodeURIComponent(newSessionId)}`;
-              window.history.pushState({ path: newUrl }, '', newUrl);
             }}
           />
         ) : activeView === 'customer' ? (

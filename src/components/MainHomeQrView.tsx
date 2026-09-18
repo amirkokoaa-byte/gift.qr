@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react';
 import QRCode from 'qrcode';
 import { Smartphone, Sparkles, RefreshCw, Copy, Check, ExternalLink, ShieldCheck } from 'lucide-react';
 import { CampaignSettings } from '../types';
-import { createNewSessionId } from '../services/firebase';
+import { createNewSessionId, subscribeToSession } from '../services/firebase';
 
 interface MainHomeQrViewProps {
   currentSessionId: string;
@@ -22,6 +22,31 @@ export const MainHomeQrView: React.FC<MainHomeQrViewProps> = ({
   const [qrDataUrl, setQrDataUrl] = useState<string>('');
   const [targetUrl, setTargetUrl] = useState<string>('');
   const [isCopied, setIsCopied] = useState(false);
+  const [justScanned, setJustScanned] = useState(false);
+
+  // Automatically listen for QR scan or claim by customer
+  // After a customer scans the QR code, generate a brand new QR code every time
+  useEffect(() => {
+    if (!currentSessionId) return;
+
+    let timer: any = null;
+    const unsubscribe = subscribeToSession(currentSessionId, (session) => {
+      if (session && (session.status === 'scanned' || session.status === 'used')) {
+        setJustScanned(true);
+        if (timer) clearTimeout(timer);
+        timer = setTimeout(() => {
+          const newId = createNewSessionId();
+          onGenerateNewSession(newId);
+          setJustScanned(false);
+        }, 900);
+      }
+    });
+
+    return () => {
+      unsubscribe();
+      if (timer) clearTimeout(timer);
+    };
+  }, [currentSessionId, onGenerateNewSession]);
 
   // Generate the real QR Code URL that points to the customer's gift session
   useEffect(() => {
@@ -73,9 +98,17 @@ export const MainHomeQrView: React.FC<MainHomeQrViewProps> = ({
         <h2 className="text-2xl sm:text-4xl font-black text-[#14382c] tracking-tight mb-2">
           امسح الكود واستلم هديتك فوراً
         </h2>
-        <p className="text-sm sm:text-base text-slate-600 max-w-lg mx-auto mb-8 leading-relaxed">
+        <p className="text-sm sm:text-base text-slate-600 max-w-lg mx-auto mb-6 leading-relaxed">
           وجّه كاميرا هاتفك المحمول نحو رمز الاستجابة السريعة (QR) بالأسفل لتفتح لك صفحة سحب وتدوير الهدية مباشرة على هاتفك!
         </p>
+
+        {/* Real-time Scan Notification Badge */}
+        {justScanned && (
+          <div className="mb-6 inline-flex items-center gap-2 px-5 py-2.5 rounded-2xl bg-emerald-100/90 border-2 border-emerald-500 text-[#14382c] font-black text-xs sm:text-sm animate-pulse shadow-md">
+            <Check className="w-4 h-4 text-emerald-700" />
+            <span>تم مسح الكود بنجاح! جاري عرض كود QR جديد للعميل التالي...</span>
+          </div>
+        )}
 
         {/* ------------------------------------------------------------- */}
         {/* The QR Code Container Box with Mandated "SCAN ME" Sub-caption */}

@@ -198,6 +198,133 @@ export async function getSessionRecord(sessionId: string): Promise<SessionRecord
 }
 
 // -------------------------------------------------------------
+// Mark Session as Scanned (Called when Customer opens QR link)
+// -------------------------------------------------------------
+export async function markSessionAsScanned(sessionId: string): Promise<void> {
+  if (!sessionId) return;
+  const now = new Date().toISOString();
+
+  // 1. Update local storage record
+  try {
+    const raw = localStorage.getItem(SESSIONS_STORAGE_KEY);
+    const sessions: Record<string, SessionRecord> = raw ? JSON.parse(raw) : {};
+    if (!sessions[sessionId] || sessions[sessionId].status !== 'used') {
+      sessions[sessionId] = {
+        sessionId,
+        status: 'scanned',
+        scannedAt: now,
+        scannedAtMillis: Date.now(),
+        createdAt: sessions[sessionId]?.createdAt || now,
+        claimedBy: sessions[sessionId]?.claimedBy,
+      };
+      localStorage.setItem(SESSIONS_STORAGE_KEY, JSON.stringify(sessions));
+    }
+  } catch (e) {
+    console.warn('Local session scan update error:', e);
+  }
+
+  // 2. Dispatch local event for same-browser tabs/views
+  window.dispatchEvent(new CustomEvent('softrose_data_updated'));
+
+  // 3. Update Firestore cloud database for real-time cross-device synchronization
+  const { db, isFirebaseActive } = initFirebase();
+  if (isFirebaseActive && db) {
+    try {
+      const sessionRef = doc(db, 'sessions', sessionId);
+      await setDoc(
+        sessionRef,
+        {
+          sessionId,
+          status: 'scanned',
+          scannedAt: now,
+          scannedAtMillis: Date.now(),
+        },
+        { merge: true }
+      );
+    } catch (err) {
+      console.warn('Firestore markSessionAsScanned error:', err);
+    }
+  }
+}
+
+// -------------------------------------------------------------
+// Subscribe to Session in Real-time (Triggers new QR on scan/claim)
+// -------------------------------------------------------------
+export function subscribeToSession(
+  sessionId: string,
+  callback: (session: SessionRecord | null) => void
+): () => void {
+  if (!sessionId) {
+    return () => {};
+  }
+
+  const { db, isFirebaseActive } = initFirebase();
+  let isCleanedUp = false;
+  let unsubFirestore: (() => void) | null = null;
+
+  // 1. Listen via Firestore real-time onSnapshot if active
+  if (isFirebaseActive && db) {
+    try {
+      const sessionRef = doc(db, 'sessions', sessionId);
+      unsubFirestore = onSnapshot(
+        sessionRef,
+        (snap) => {
+          if (isCleanedUp) return;
+          if (snap.exists()) {
+            callback(snap.data() as SessionRecord);
+          } else {
+            const raw = localStorage.getItem(SESSIONS_STORAGE_KEY);
+            const sessions: Record<string, SessionRecord> = raw ? JSON.parse(raw) : {};
+            callback(sessions[sessionId] || null);
+          }
+        },
+        (err) => {
+          console.warn('Firestore session snapshot error:', err);
+          const raw = localStorage.getItem(SESSIONS_STORAGE_KEY);
+          const sessions: Record<string, SessionRecord> = raw ? JSON.parse(raw) : {};
+          callback(sessions[sessionId] || null);
+        }
+      );
+    } catch (err) {
+      console.warn('subscribeToSession firestore error:', err);
+    }
+  }
+
+  // 2. Listen to local storage & window events for local / same-tab testing
+  const handleLocalChange = () => {
+    if (isCleanedUp) return;
+    try {
+      const raw = localStorage.getItem(SESSIONS_STORAGE_KEY);
+      if (raw) {
+        const sessions: Record<string, SessionRecord> = JSON.parse(raw);
+        if (sessions[sessionId]) {
+          callback(sessions[sessionId]);
+        }
+      }
+    } catch {}
+  };
+
+  window.addEventListener('storage', handleLocalChange);
+  window.addEventListener('softrose_data_updated', handleLocalChange);
+
+  // Immediate initial check
+  getSessionRecord(sessionId).then((rec) => {
+    if (!isCleanedUp && rec) {
+      callback(rec);
+    }
+  });
+
+  return () => {
+    isCleanedUp = true;
+    if (unsubFirestore) {
+      unsubFirestore();
+    }
+    window.removeEventListener('storage', handleLocalChange);
+    window.removeEventListener('softrose_data_updated', handleLocalChange);
+  };
+}
+
+// -------------------------------------------------------------
 // Core Feature: Atomic Unique Number Generation & Lock Transaction
 // -------------------------------------------------------------
 export async function claimGiftWithUniqueNumber(

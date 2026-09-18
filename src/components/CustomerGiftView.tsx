@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { Gift, Sparkles, Download, CheckCircle2, AlertCircle, Phone, User, Lock, ArrowRight, Share2, Award } from 'lucide-react';
 import confetti from 'canvas-confetti';
 import { CampaignSettings, SessionRecord } from '../types';
-import { claimGiftWithUniqueNumber, getSessionRecord } from '../services/firebase';
+import { claimGiftWithUniqueNumber, getSessionRecord, markSessionAsScanned } from '../services/firebase';
 
 interface CustomerGiftViewProps {
   sessionId: string;
@@ -82,6 +82,8 @@ export const CustomerGiftView: React.FC<CustomerGiftViewProps> = ({
           } else {
             setIsSessionLocked(false);
             setLockedSessionData(null);
+            // Mark session as scanned immediately so the booth generates a fresh QR code for the next customer
+            markSessionAsScanned(sessionId);
           }
         }
       } catch (err) {
