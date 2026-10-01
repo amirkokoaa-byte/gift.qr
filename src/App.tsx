@@ -9,6 +9,8 @@ import { SettingsModal } from './components/SettingsModal';
 import { AdminPasscodeModal } from './components/AdminPasscodeModal';
 import { QRCodeTesterModal } from './components/QRCodeTesterModal';
 import { CodeDocumentationModal } from './components/CodeDocumentationModal';
+import { MilitaryBanScreen } from './components/MilitaryBanScreen';
+import { useSecurityBanCheck } from './utils/useSecurityBanCheck';
 import { CampaignSettings } from './types';
 import {
   DEFAULT_SETTINGS,
@@ -19,6 +21,7 @@ import {
 } from './services/firebase';
 
 export default function App() {
+  const { isBanned, bannedIp, banReason, banUntil, recheckBan } = useSecurityBanCheck();
   const [settings, setSettings] = useState<CampaignSettings>(DEFAULT_SETTINGS);
   const [currentSessionId, setCurrentSessionId] = useState<string>(() => createNewSessionId());
   const [activeView, setActiveView] = useState<'home_qr' | 'customer' | 'admin' | 'raffle'>('home_qr');
@@ -49,7 +52,7 @@ export default function App() {
       const activeSessionInUrl = targetSession !== undefined ? targetSession : currentParams.get('session');
 
       // Check query parameter whitelist (prevent unauthorized query tampering)
-      const allowedParams = new Set(['session', 'view', 'test']);
+      const allowedParams = new Set(['session', 'view', 'test', 'src', 'scan', 't']);
       for (const key of currentParams.keys()) {
         if (!allowedParams.has(key)) {
           setTamperReason('تم رصد معاملات غير مصرح بها أو تلاعب في رابط المتصفح. لا يمكن المتابعة إلا برمز الإدارة.');
@@ -116,10 +119,13 @@ export default function App() {
     getCampaignSettings().then((s) => setSettings(s));
   }, []);
 
-  // Parse URL for session or view parameters (e.g. ?session=sr_101 or ?view=admin)
+  // Parse URL for session or view parameters (e.g. ?session=sr_101 or /gift/sr_101 or ?view=admin)
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
-    const sessionParam = params.get('session');
+    const pathname = window.location.pathname;
+    const giftMatch = pathname.match(/^\/gift\/([^/?#]+)/);
+    const pathSession = giftMatch ? decodeURIComponent(giftMatch[1]) : null;
+    const sessionParam = pathSession || params.get('session');
     const viewParam = params.get('view');
 
     // Run security check to prevent URL tampering or duplicate scans
@@ -144,7 +150,10 @@ export default function App() {
   useEffect(() => {
     const handleUrlChange = () => {
       const params = new URLSearchParams(window.location.search);
-      const sessionParam = params.get('session');
+      const pathname = window.location.pathname;
+      const giftMatch = pathname.match(/^\/gift\/([^/?#]+)/);
+      const pathSession = giftMatch ? decodeURIComponent(giftMatch[1]) : null;
+      const sessionParam = pathSession || params.get('session');
       checkUrlSecurity(sessionParam);
     };
 
@@ -186,6 +195,18 @@ export default function App() {
   // Determine if tabs and navigation should be displayed
   // Customer never sees the tabs; Main screen only shows tabs after admin logs in with password
   const showViewSwitcherTabs = isAdminLoggedIn;
+
+  // Enforce Instant Military Ban Screen across the entire application if banned
+  if (isBanned) {
+    return (
+      <MilitaryBanScreen
+        ip={bannedIp}
+        reason={banReason}
+        banUntil={banUntil}
+        onRefresh={recheckBan}
+      />
+    );
+  }
 
   return (
     <div

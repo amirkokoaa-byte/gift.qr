@@ -8,6 +8,8 @@ import {
   getDoc,
   setDoc,
   deleteDoc,
+  getDocs,
+  writeBatch,
   type Firestore,
 } from 'firebase/firestore';
 import { getStorage, ref, uploadString, getDownloadURL, type FirebaseStorage } from 'firebase/storage';
@@ -604,34 +606,46 @@ export function subscribeToCustomers(callback: (customers: CustomerRecord[]) => 
   // Trigger background sync of any previously unsynced local records
   syncLocalCustomersToFirestore().catch((err) => console.warn('Initial sync error:', err));
 
+  let unsubFirestore: (() => void) | null = null;
+  let isCleanedUp = false;
+  let latestFirestoreList: CustomerRecord[] = [];
+
+  const emitData = (firestoreData: CustomerRecord[] = latestFirestoreList) => {
+    if (isCleanedUp) return;
+    const list: CustomerRecord[] = [...firestoreData];
+
+    // Merge any local records that might not be in Firestore yet
+    try {
+      const rawLocal = localStorage.getItem(CUSTOMERS_STORAGE_KEY);
+      if (rawLocal) {
+        const localList: CustomerRecord[] = JSON.parse(rawLocal);
+        for (const loc of localList) {
+          if (!list.some((c) => c.id === loc.id || (loc.sessionId && c.sessionId === loc.sessionId))) {
+            list.push(loc);
+          }
+        }
+      }
+    } catch {}
+
+    // Sort newest first
+    list.sort((a, b) => (b.claimedAtMillis || 0) - (a.claimedAtMillis || 0));
+    callback(list);
+  };
+
   if (isFirebaseActive && db) {
     try {
       const q = collection(db, 'customers');
-      const unsubscribe = onSnapshot(
+      unsubFirestore = onSnapshot(
         q,
         (snap) => {
+          if (isCleanedUp) return;
           updateHealthStatus('connected', 'متصل بالسحابة (Firebase Connected)');
-          const list: CustomerRecord[] = [];
-          snap.forEach((d) => list.push({ id: d.id, ...(d.data() as any) }));
-
-          // Merge any local records that might not be in Firestore yet
-          try {
-            const rawLocal = localStorage.getItem(CUSTOMERS_STORAGE_KEY);
-            if (rawLocal) {
-              const localList: CustomerRecord[] = JSON.parse(rawLocal);
-              for (const loc of localList) {
-                if (!list.some((c) => c.id === loc.id || (loc.sessionId && c.sessionId === loc.sessionId))) {
-                  list.push(loc);
-                }
-              }
-            }
-          } catch {}
-
-          // Sort newest first
-          list.sort((a, b) => (b.claimedAtMillis || 0) - (a.claimedAtMillis || 0));
-          callback(list);
+          latestFirestoreList = [];
+          snap.forEach((d) => latestFirestoreList.push({ id: d.id, ...(d.data() as any) }));
+          emitData(latestFirestoreList);
         },
         (error: any) => {
+          if (isCleanedUp) return;
           console.warn('Firestore snapshot error, falling back to local:', error);
           if (error?.code === 'permission-denied') {
             updateHealthStatus('permission_denied', 'قواعد Firestore في Firebase Console مقفلة وترفض القراءة والكتابة (permission-denied)');
@@ -641,22 +655,38 @@ export function subscribeToCustomers(callback: (customers: CustomerRecord[]) => 
           loadLocalCustomers(callback);
         }
       );
-      return unsubscribe;
     } catch (e: any) {
       console.warn('Cannot establish Firestore snapshot, using local listener:', e);
       updateHealthStatus('error', e?.message || 'تعذر بدء مراقبة قاعدة البيانات');
+      loadLocalCustomers(callback);
     }
   } else {
     updateHealthStatus('local_only', 'يعمل في الوضع المحلي');
+    loadLocalCustomers(callback);
   }
 
-  // Local storage listener
-  loadLocalCustomers(callback);
-  const handleUpdate = () => loadLocalCustomers(callback);
+  // Real-time listener for manual resets and cross-tab/local updates
+  const handleUpdate = () => {
+    if (isCleanedUp) return;
+    const rawLocal = localStorage.getItem(CUSTOMERS_STORAGE_KEY);
+    if (!rawLocal || rawLocal === '[]') {
+      if (!isFirebaseActive || !db) {
+        callback([]);
+      } else {
+        // Re-emit immediately to reflect cleared local storage
+        emitData([]);
+      }
+    } else {
+      emitData();
+    }
+  };
+
   window.addEventListener('softrose_data_updated', handleUpdate);
   window.addEventListener('storage', handleUpdate);
 
   return () => {
+    isCleanedUp = true;
+    if (unsubFirestore) unsubFirestore();
     window.removeEventListener('softrose_data_updated', handleUpdate);
     window.removeEventListener('storage', handleUpdate);
   };
@@ -1102,12 +1132,87 @@ export async function verifySessionAuthenticity(sessionId: string | null | undef
   };
 }
 
-export function resetAllCampaignData(): void {
-  localStorage.removeItem(CUSTOMERS_STORAGE_KEY);
-  localStorage.removeItem(SESSIONS_STORAGE_KEY);
-  localStorage.removeItem(NUMBERS_STORAGE_KEY);
-  localStorage.removeItem(RAFFLE_WINNERS_STORAGE_KEY);
+export async function resetAllCampaignData(): Promise<void> {
+  // 1. Clear local storage immediately
+  try {
+    localStorage.removeItem(CUSTOMERS_STORAGE_KEY);
+    localStorage.setItem(CUSTOMERS_STORAGE_KEY, JSON.stringify([]));
+    localStorage.removeItem(SESSIONS_STORAGE_KEY);
+    localStorage.setItem(SESSIONS_STORAGE_KEY, JSON.stringify({}));
+    localStorage.removeItem(NUMBERS_STORAGE_KEY);
+    localStorage.setItem(NUMBERS_STORAGE_KEY, JSON.stringify({}));
+    localStorage.removeItem(RAFFLE_WINNERS_STORAGE_KEY);
+    localStorage.setItem(RAFFLE_WINNERS_STORAGE_KEY, JSON.stringify([]));
+    localStorage.removeItem('softrose_device_claimed');
+  } catch (e) {
+    console.warn('Error clearing localStorage on reset:', e);
+  }
+
+  // Dispatch events to update UI immediately
   window.dispatchEvent(new CustomEvent('softrose_data_updated'));
+  window.dispatchEvent(new CustomEvent('softrose_raffle_updated'));
+
+  // 2. Clear real Firestore database
+  const { db, isFirebaseActive } = initFirebase();
+  if (isFirebaseActive && db) {
+    try {
+      const collectionsToClear = ['customers', 'sessions', 'allocated_numbers', 'raffle_winners'];
+
+      for (const colName of collectionsToClear) {
+        try {
+          const colRef = collection(db, colName);
+          const snap = await getDocs(colRef);
+          if (!snap.empty) {
+            const docs = snap.docs;
+            // 2a. Attempt batch delete first
+            try {
+              for (let i = 0; i < docs.length; i += 400) {
+                const chunk = docs.slice(i, i + 400);
+                const batch = writeBatch(db);
+                chunk.forEach((d) => batch.delete(d.ref));
+                await batch.commit();
+              }
+            } catch (batchErr) {
+              console.warn(`writeBatch failed for ${colName}, attempting individual deletes:`, batchErr);
+              // 2b. Fallback: individual deleteDoc for each document
+              await Promise.allSettled(docs.map((d) => deleteDoc(d.ref)));
+            }
+          }
+        } catch (colErr) {
+          console.warn(`Error clearing Firestore collection ${colName}:`, colErr);
+        }
+      }
+
+      // Reset campaign_metadata allocated_numbers_registry document
+      try {
+        const regRef = doc(db, 'campaign_metadata', 'allocated_numbers_registry');
+        await setDoc(regRef, { numbers: [], allocated: {}, lastReset: new Date().toISOString() });
+      } catch (regErr) {
+        console.warn('Error resetting metadata registry in Firestore:', regErr);
+      }
+    } catch (err) {
+      console.error('Firestore reset error:', err);
+    }
+  }
+
+  // 3. Re-verify localStorage cleanup
+  try {
+    localStorage.removeItem(CUSTOMERS_STORAGE_KEY);
+    localStorage.setItem(CUSTOMERS_STORAGE_KEY, JSON.stringify([]));
+    localStorage.removeItem(SESSIONS_STORAGE_KEY);
+    localStorage.setItem(SESSIONS_STORAGE_KEY, JSON.stringify({}));
+    localStorage.removeItem(NUMBERS_STORAGE_KEY);
+    localStorage.setItem(NUMBERS_STORAGE_KEY, JSON.stringify({}));
+    localStorage.removeItem(RAFFLE_WINNERS_STORAGE_KEY);
+    localStorage.setItem(RAFFLE_WINNERS_STORAGE_KEY, JSON.stringify([]));
+    localStorage.removeItem('softrose_device_claimed');
+  } catch (e) {
+    console.warn('Error re-clearing localStorage on reset:', e);
+  }
+
+  // Dispatch events again after cloud deletion completes
+  window.dispatchEvent(new CustomEvent('softrose_data_updated'));
+  window.dispatchEvent(new CustomEvent('softrose_raffle_updated'));
 }
 
 // -------------------------------------------------------------
@@ -1262,4 +1367,256 @@ export async function clearAllRaffleWinners(): Promise<void> {
       console.warn('Error clearing firestore winners:', e);
     }
   }
+}
+
+// =============================================================
+// MILITARY-GRADE ANTI-TAMPERING & BAN SYSTEM (2026)
+// =============================================================
+
+export const LOCAL_BAN_STORAGE_KEY = 'softrose_banned_device';
+export const STRIKE_COUNT_STORAGE_KEY = 'softrose_strike_count';
+export const BAN_DURATION_MS = 31536000000000; // 1000 years (~31.5 trillion ms)
+export const QR_SCAN_SECRET = 'softrose_military_qr_salt_2026';
+
+let cachedUserIp: string | null = null;
+
+export async function getUserIpAddress(): Promise<string> {
+  if (cachedUserIp && cachedUserIp !== 'unknown_ip') return cachedUserIp;
+  try {
+    const res = await fetch('https://api.ipify.org?format=json', { signal: AbortSignal.timeout(3500) });
+    if (res.ok) {
+      const data = await res.json();
+      if (data && data.ip) {
+        cachedUserIp = String(data.ip).trim();
+        return cachedUserIp;
+      }
+    }
+  } catch {
+    // Fallback 1
+    try {
+      const res2 = await fetch('https://api64.ipify.org?format=json', { signal: AbortSignal.timeout(3500) });
+      if (res2.ok) {
+        const data2 = await res2.json();
+        if (data2 && data2.ip) {
+          cachedUserIp = String(data2.ip).trim();
+          return cachedUserIp;
+        }
+      }
+    } catch {
+      // Fallback 2
+      try {
+        const res3 = await fetch('https://ipapi.co/json', { signal: AbortSignal.timeout(3500) });
+        if (res3.ok) {
+          const data3 = await res3.json();
+          if (data3 && data3.ip) {
+            cachedUserIp = String(data3.ip).trim();
+            return cachedUserIp;
+          }
+        }
+      } catch {}
+    }
+  }
+  return cachedUserIp || '127.0.0.1';
+}
+
+export function generateQrScanToken(sessionId: string, timestamp: number): string {
+  const payload = `${sessionId}:${timestamp}:${QR_SCAN_SECRET}`;
+  let hash = 0x811c9dc5;
+  for (let i = 0; i < payload.length; i++) {
+    hash ^= payload.charCodeAt(i);
+    hash = (hash * 0x01000193) >>> 0;
+  }
+  return hash.toString(36);
+}
+
+export function verifyQrScanToken(
+  sessionId: string | null | undefined,
+  token: string | null | undefined,
+  timestampStr: string | null | undefined,
+  srcParam: string | null | undefined
+): boolean {
+  if (!sessionId || !token || !timestampStr) return false;
+  // Origin check: must have legitimate QR source indicator
+  if (srcParam !== 'qr') return false;
+
+  const ts = parseInt(timestampStr, 10);
+  if (isNaN(ts)) return false;
+
+  const expected = generateQrScanToken(sessionId, ts);
+  if (token !== expected) return false;
+
+  // Maximum validity: 24 hours
+  const age = Math.abs(Date.now() - ts);
+  if (age > 24 * 60 * 60 * 1000) return false;
+
+  return true;
+}
+
+export function getStoredStrikeCount(): number {
+  try {
+    const raw = localStorage.getItem(STRIKE_COUNT_STORAGE_KEY);
+    return raw ? parseInt(raw, 10) || 0 : 0;
+  } catch {
+    return 0;
+  }
+}
+
+export function setStoredStrikeCount(count: number): void {
+  try {
+    localStorage.setItem(STRIKE_COUNT_STORAGE_KEY, String(count));
+  } catch {}
+}
+
+export function resetStrikeCount(): void {
+  try {
+    localStorage.removeItem(STRIKE_COUNT_STORAGE_KEY);
+  } catch {}
+}
+
+export interface BanCheckResult {
+  isBanned: boolean;
+  reason?: string;
+  ip?: string;
+  bannedAt?: string;
+  banUntil?: number;
+}
+
+export async function checkIsBanned(targetIp?: string): Promise<BanCheckResult> {
+  // 1. Check LocalStorage Ban
+  try {
+    const rawLocal = localStorage.getItem(LOCAL_BAN_STORAGE_KEY);
+    if (rawLocal) {
+      const parsed = JSON.parse(rawLocal);
+      if (parsed && parsed.banned) {
+        if (!parsed.banUntil || parsed.banUntil > Date.now()) {
+          return {
+            isBanned: true,
+            reason: parsed.reason || 'تم حظرك. لقد تجاوزت الحد المسموح به لمحاولات الدخول. تم حظر هذا الجهاز.',
+            ip: parsed.ip || targetIp,
+            bannedAt: parsed.bannedAt,
+            banUntil: parsed.banUntil,
+          };
+        } else {
+          // Ban expired
+          localStorage.removeItem(LOCAL_BAN_STORAGE_KEY);
+        }
+      }
+    }
+  } catch (e) {
+    console.warn('Local ban check error:', e);
+  }
+
+  // 2. Check Firestore IP Ban
+  const userIp = targetIp || (await getUserIpAddress());
+  const { db, isFirebaseActive } = initFirebase();
+  if (isFirebaseActive && db && userIp && userIp !== 'unknown_ip') {
+    try {
+      const sanitizedIp = userIp.replace(/[.:/]/g, '_');
+      const ipDocRef = doc(db, 'banned_ips', sanitizedIp);
+      const snap = await getDoc(ipDocRef);
+      if (snap.exists()) {
+        const data = snap.data();
+        if (!data.banUntilMillis || data.banUntilMillis > Date.now()) {
+          // Mirror to local storage so subsequent offline checks block immediately
+          try {
+            localStorage.setItem(
+              LOCAL_BAN_STORAGE_KEY,
+              JSON.stringify({
+                banned: true,
+                bannedAt: data.bannedAt || new Date().toISOString(),
+                banUntil: data.banUntilMillis || Date.now() + BAN_DURATION_MS,
+                ip: userIp,
+                reason: data.reason || 'تم حظرك. لقد تجاوزت الحد المسموح به لمحاولات الدخول. تم حظر هذا الجهاز.',
+              })
+            );
+          } catch {}
+
+          return {
+            isBanned: true,
+            reason: data.reason || 'تم حظرك. لقد تجاوزت الحد المسموح به لمحاولات الدخول. تم حظر هذا الجهاز.',
+            ip: userIp,
+            bannedAt: data.bannedAt,
+            banUntil: data.banUntilMillis,
+          };
+        }
+      }
+    } catch (e) {
+      console.warn('Firestore IP ban check note:', e);
+    }
+  }
+
+  return { isBanned: false, ip: userIp };
+}
+
+export async function recordStrikeAndCheckBan(providedIp?: string): Promise<{ strikes: number; isBanned: boolean; ip: string }> {
+  const currentStrikes = getStoredStrikeCount() + 1;
+  setStoredStrikeCount(currentStrikes);
+
+  const userIp = providedIp || (await getUserIpAddress());
+
+  if (currentStrikes >= 2) {
+    // 2-Strike Limit Reached: Trigger 1000-Year Ban!
+    const banUntil = Date.now() + BAN_DURATION_MS;
+    const banRecord = {
+      banned: true,
+      bannedAt: new Date().toISOString(),
+      bannedAtMillis: Date.now(),
+      banUntil,
+      ip: userIp,
+      reason: 'تم حظرك. لقد تجاوزت الحد المسموح به لمحاولات الدخول. تم حظر هذا الجهاز.',
+    };
+
+    // 1. Write to localStorage
+    try {
+      localStorage.setItem(LOCAL_BAN_STORAGE_KEY, JSON.stringify(banRecord));
+    } catch (e) {
+      console.warn('Error saving local ban:', e);
+    }
+
+    // 2. Write to Firebase Firestore in banned_ips collection
+    const { db, isFirebaseActive } = initFirebase();
+    if (isFirebaseActive && db && userIp && userIp !== 'unknown_ip') {
+      try {
+        const sanitizedIp = userIp.replace(/[.:/]/g, '_');
+        await setDoc(doc(db, 'banned_ips', sanitizedIp), {
+          ip: userIp,
+          bannedAt: new Date().toISOString(),
+          bannedAtMillis: Date.now(),
+          banUntilMillis: banUntil,
+          banDurationMs: BAN_DURATION_MS,
+          reason: 'تم حظرك. لقد تجاوزت الحد المسموح به لمحاولات الدخول. تم حظر هذا الجهاز.',
+        });
+      } catch (err) {
+        console.warn('Error writing banned IP to Firestore:', err);
+      }
+    }
+
+    // Notify UI immediately via custom event
+    window.dispatchEvent(new CustomEvent('softrose_ban_triggered', { detail: banRecord }));
+
+    return { strikes: currentStrikes, isBanned: true, ip: userIp };
+  }
+
+  return { strikes: currentStrikes, isBanned: false, ip: userIp };
+}
+
+export async function unbanDeviceAndIp(ipToUnban?: string): Promise<void> {
+  // Clear local storage ban & strike count
+  try {
+    localStorage.removeItem(LOCAL_BAN_STORAGE_KEY);
+    localStorage.removeItem(STRIKE_COUNT_STORAGE_KEY);
+  } catch {}
+
+  const userIp = ipToUnban || (await getUserIpAddress());
+  const { db, isFirebaseActive } = initFirebase();
+  if (isFirebaseActive && db && userIp && userIp !== 'unknown_ip') {
+    try {
+      const sanitizedIp = userIp.replace(/[.:/]/g, '_');
+      await deleteDoc(doc(db, 'banned_ips', sanitizedIp));
+    } catch (err) {
+      console.warn('Error deleting banned IP from Firestore:', err);
+    }
+  }
+
+  window.dispatchEvent(new CustomEvent('softrose_ban_removed'));
 }

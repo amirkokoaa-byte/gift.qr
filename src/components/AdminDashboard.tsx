@@ -16,6 +16,7 @@ import {
   ExternalLink,
   Sparkles,
   Trophy,
+  Loader2,
 } from 'lucide-react';
 import { CustomerRecord, CampaignSettings } from '../types';
 import {
@@ -50,6 +51,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const [searchTerm, setSearchTerm] = useState('');
   const [isExportingPdf, setIsExportingPdf] = useState(false);
   const [showResetConfirm, setShowResetConfirm] = useState(false);
+  const [isResetting, setIsResetting] = useState(false);
 
   // Customer Edit Modal State
   const [selectedCustomerForEdit, setSelectedCustomerForEdit] = useState<CustomerRecord | null>(null);
@@ -128,9 +130,19 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     setIsEditModalOpen(true);
   };
 
-  const handleResetData = () => {
-    resetAllCampaignData();
-    setShowResetConfirm(false);
+  const handleResetData = async () => {
+    setIsResetting(true);
+    try {
+      setCustomers([]);
+      await resetAllCampaignData();
+      setCustomers([]);
+    } catch (e) {
+      console.error('Reset error:', e);
+      setCustomers([]);
+    } finally {
+      setIsResetting(false);
+      setShowResetConfirm(false);
+    }
   };
 
   const handleQuickCloudSync = async () => {
@@ -502,13 +514,22 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 <span className="text-rose-800 font-bold text-[11px]">هل أنت متأكد من مسح جميع السجلات؟</span>
                 <button
                   onClick={handleResetData}
-                  className="px-2 py-0.5 rounded bg-rose-600 text-white font-bold text-[11px]"
+                  disabled={isResetting}
+                  className="px-2.5 py-1 rounded bg-rose-600 hover:bg-rose-700 text-white font-bold text-[11px] flex items-center gap-1 disabled:opacity-50 transition-colors"
                 >
-                  نعم، امسح
+                  {isResetting ? (
+                    <>
+                      <Loader2 className="w-3 h-3 animate-spin" />
+                      <span>جاري المسح من قاعدة البيانات...</span>
+                    </>
+                  ) : (
+                    'نعم، امسح'
+                  )}
                 </button>
                 <button
                   onClick={() => setShowResetConfirm(false)}
-                  className="px-2 py-0.5 rounded bg-slate-200 text-slate-700 font-bold text-[11px]"
+                  disabled={isResetting}
+                  className="px-2.5 py-1 rounded bg-slate-200 hover:bg-slate-300 text-slate-700 font-bold text-[11px] disabled:opacity-50 transition-colors"
                 >
                   إلغاء
                 </button>

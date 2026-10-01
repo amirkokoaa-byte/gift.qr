@@ -1,5 +1,22 @@
-import React, { useState } from 'react';
-import { KeyRound, X, Lock, ShieldCheck, Sparkles, Trophy, Settings, Dices, ArrowRight } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import {
+  KeyRound,
+  X,
+  Lock,
+  ShieldCheck,
+  Sparkles,
+  Trophy,
+  Settings,
+  Dices,
+  ArrowRight,
+  AlertTriangle,
+  Loader2,
+} from 'lucide-react';
+import {
+  getStoredStrikeCount,
+  recordStrikeAndCheckBan,
+  resetStrikeCount,
+} from '../services/firebase';
 
 interface AdminPasscodeModalProps {
   isOpen: boolean;
@@ -21,26 +38,59 @@ export const AdminPasscodeModal: React.FC<AdminPasscodeModalProps> = ({
   preventClose = false,
 }) => {
   const [passcode, setPasscode] = useState('');
-  const [error, setError] = useState(false);
+  const [errorMessage, setErrorMessage] = useState('');
   const [isAuthenticated, setIsAuthenticated] = useState(false);
+  const [strikeCount, setStrikeCount] = useState<number>(0);
+  const [isVerifying, setIsVerifying] = useState(false);
+
+  useEffect(() => {
+    if (isOpen) {
+      setStrikeCount(getStoredStrikeCount());
+      setErrorMessage('');
+      setPasscode('');
+    }
+  }, [isOpen]);
 
   if (!isOpen) return null;
 
   const handleClose = () => {
     setIsAuthenticated(false);
     setPasscode('');
-    setError(false);
+    setErrorMessage('');
     onClose();
   };
 
-  const handleCheckPasscode = (code: string) => {
+  const handleCheckPasscode = async (code: string) => {
+    if (isVerifying) return;
+    setIsVerifying(true);
+
     if (code.trim() === correctPasscode.trim()) {
-      setError(false);
+      resetStrikeCount();
+      setStrikeCount(0);
+      setErrorMessage('');
       setPasscode('');
+      setIsVerifying(false);
       setIsAuthenticated(true);
     } else {
-      setError(true);
-      setPasscode('');
+      // Wrong passcode: execute strike logic
+      try {
+        const result = await recordStrikeAndCheckBan();
+        setStrikeCount(result.strikes);
+        setPasscode('');
+
+        if (result.isBanned) {
+          setErrorMessage('تم حظرك! لقد تجاوزت الحد المسموح به لمحاولات الدخول (محاولتان). تم حظر هذا الجهاز.');
+          setTimeout(() => {
+            handleClose();
+          }, 400);
+        } else {
+          setErrorMessage('رمز المرور غير صحيح! (محاولة 1 من 2). تحذير: يتبقى محاولة واحدة فقط قبل الحظر النهائي للجهاز لمدة 1000 عام!');
+        }
+      } catch (err) {
+        setErrorMessage('رمز المرور غير صحيح!');
+      } finally {
+        setIsVerifying(false);
+      }
     }
   };
 
@@ -55,9 +105,7 @@ export const AdminPasscodeModal: React.FC<AdminPasscodeModalProps> = ({
       setPasscode(next);
       if (next === correctPasscode.trim()) {
         setTimeout(() => {
-          setPasscode('');
-          setError(false);
-          setIsAuthenticated(true);
+          handleCheckPasscode(next);
         }, 150);
       }
     }
@@ -66,9 +114,11 @@ export const AdminPasscodeModal: React.FC<AdminPasscodeModalProps> = ({
   const handleSelectChoice = (dest: 'admin' | 'raffle') => {
     setIsAuthenticated(false);
     setPasscode('');
-    setError(false);
+    setErrorMessage('');
     onSuccess(dest);
   };
+
+  const remainingAttempts = Math.max(0, 2 - strikeCount);
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs animate-in fade-in duration-200">
@@ -81,6 +131,12 @@ export const AdminPasscodeModal: React.FC<AdminPasscodeModalProps> = ({
             <X className="w-5 h-5" />
           </button>
         )}
+
+        {/* Remaining attempts security indicator */}
+        <div className="mb-3 inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-slate-100 text-slate-700 text-[11px] font-bold border border-slate-200" dir="rtl">
+          <AlertTriangle className={`w-3.5 h-3.5 ${strikeCount > 0 ? 'text-amber-600 animate-pulse' : 'text-slate-500'}`} />
+          <span>المحاولات المتبقية: <strong className={strikeCount > 0 ? 'text-rose-600' : 'text-emerald-700'}>{remainingAttempts} من 2</strong></span>
+        </div>
 
         {/* ========================================================= */}
         {/* STEP 2: CHOICE SCREEN (AFTER PASSCODE VERIFICATION)        */}
@@ -99,7 +155,7 @@ export const AdminPasscodeModal: React.FC<AdminPasscodeModalProps> = ({
             </p>
 
             <div className="space-y-3 mb-4 text-right">
-              {/* Option 1: Random Draw (الاختيار العشوائي) */}
+              {/* Option 1: Random Draw */}
               <button
                 type="button"
                 id="select-random-raffle-btn"
@@ -122,7 +178,7 @@ export const AdminPasscodeModal: React.FC<AdminPasscodeModalProps> = ({
                 </div>
               </button>
 
-              {/* Option 2: Admin Dashboard (لوحة الإدارة) */}
+              {/* Option 2: Admin Dashboard */}
               <button
                 type="button"
                 id="select-admin-dashboard-btn"
@@ -158,7 +214,7 @@ export const AdminPasscodeModal: React.FC<AdminPasscodeModalProps> = ({
             <h3 className="text-xl font-black text-[#14382c] mb-1">
               {customTitle || 'دخول لوحة تحكم المدير'}
             </h3>
-            <p className="text-xs text-slate-500 mb-6">
+            <p className="text-xs text-slate-500 mb-4">
               {customSubtitle || 'أدخل رمز المرور السري للإدارة'}
             </p>
 
@@ -172,21 +228,23 @@ export const AdminPasscodeModal: React.FC<AdminPasscodeModalProps> = ({
                   value={passcode}
                   onChange={(e) => {
                     setPasscode(e.target.value);
-                    setError(false);
+                    setErrorMessage('');
                   }}
                   placeholder="••••"
                   className={`w-full text-center tracking-[1em] text-2xl font-mono py-3.5 px-4 rounded-2xl border transition-all ${
-                    error
+                    errorMessage
                       ? 'border-rose-300 bg-rose-50/50 text-rose-700 ring-2 ring-rose-200 animate-shake'
                       : 'border-slate-200 bg-slate-50 focus:border-emerald-600 focus:bg-white focus:ring-2 focus:ring-emerald-100 text-[#14382c]'
                   }`}
                 />
               </div>
 
-              {error && (
-                <p className="text-xs font-bold text-rose-600 mb-4 animate-in fade-in">
-                  رمز المرور غير صحيح! حاول مرة أخرى
-                </p>
+              {errorMessage && (
+                <div className="p-3 mb-4 rounded-xl bg-rose-50 border border-rose-200 text-right animate-in fade-in" dir="rtl">
+                  <p className="text-xs font-bold text-rose-700 leading-relaxed">
+                    {errorMessage}
+                  </p>
+                </div>
               )}
 
               {/* Quick Keypad for Mobile or Touch */}
@@ -195,10 +253,11 @@ export const AdminPasscodeModal: React.FC<AdminPasscodeModalProps> = ({
                   <button
                     type="button"
                     key={key}
+                    disabled={isVerifying}
                     onClick={() => {
                       if (key === 'C') {
                         setPasscode('');
-                        setError(false);
+                        setErrorMessage('');
                       } else if (key === '✓') {
                         handleCheckPasscode(passcode);
                       } else {
@@ -211,7 +270,7 @@ export const AdminPasscodeModal: React.FC<AdminPasscodeModalProps> = ({
                         : key === 'C'
                         ? 'bg-rose-50 text-rose-600 hover:bg-rose-100'
                         : 'bg-slate-100 hover:bg-emerald-50 text-slate-700 active:scale-95'
-                    }`}
+                    } disabled:opacity-50`}
                   >
                     {key}
                   </button>
@@ -221,10 +280,20 @@ export const AdminPasscodeModal: React.FC<AdminPasscodeModalProps> = ({
               <button
                 type="submit"
                 id="admin-login-submit-btn"
-                className="w-full py-3 px-4 rounded-2xl bg-[#14382c] hover:bg-[#1b4a3a] text-white font-bold text-sm shadow-md shadow-emerald-950/20 transition-all flex items-center justify-center gap-2"
+                disabled={isVerifying}
+                className="w-full py-3 px-4 rounded-2xl bg-[#14382c] hover:bg-[#1b4a3a] text-white font-bold text-sm shadow-md shadow-emerald-950/20 transition-all flex items-center justify-center gap-2 disabled:opacity-50"
               >
-                <ShieldCheck className="w-4 h-4" />
-                تأكيد الدخول
+                {isVerifying ? (
+                  <>
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                    <span>جاري التحقق الأمني...</span>
+                  </>
+                ) : (
+                  <>
+                    <ShieldCheck className="w-4 h-4" />
+                    <span>تأكيد الدخول</span>
+                  </>
+                )}
               </button>
             </form>
           </>
@@ -233,3 +302,4 @@ export const AdminPasscodeModal: React.FC<AdminPasscodeModalProps> = ({
     </div>
   );
 };
+

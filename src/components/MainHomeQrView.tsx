@@ -2,7 +2,12 @@ import React, { useEffect, useState } from 'react';
 import QRCode from 'qrcode';
 import { Smartphone, Sparkles, RefreshCw, Copy, Check, ExternalLink, ShieldCheck } from 'lucide-react';
 import { CampaignSettings } from '../types';
-import { createNewSessionId, subscribeToSession, registerGeneratedSession } from '../services/firebase';
+import {
+  createNewSessionId,
+  subscribeToSession,
+  registerGeneratedSession,
+  generateQrScanToken,
+} from '../services/firebase';
 
 interface MainHomeQrViewProps {
   currentSessionId: string;
@@ -55,10 +60,12 @@ export const MainHomeQrView: React.FC<MainHomeQrViewProps> = ({
     // Register this active session in local & cloud registry as officially generated
     registerGeneratedSession(currentSessionId).catch(() => {});
 
-    // Current public/app URL with session query parameter
+    // Current public/app URL with verified QR scan origin signature
     const origin = window.location.origin;
-    const pathname = window.location.pathname;
-    const fullUrl = `${origin}${pathname}?session=${encodeURIComponent(currentSessionId)}`;
+    const now = Date.now();
+    const scanToken = generateQrScanToken(currentSessionId, now);
+    // Real QR scan signature parameters proving authentic camera scan
+    const fullUrl = `${origin}/gift/${encodeURIComponent(currentSessionId)}?session=${encodeURIComponent(currentSessionId)}&src=qr&scan=${scanToken}&t=${now}`;
     setTargetUrl(fullUrl);
 
     // Render High Quality QR Code Data URL with company brand dark forest green color

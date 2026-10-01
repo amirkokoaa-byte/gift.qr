@@ -1,8 +1,33 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Gift, Sparkles, Download, CheckCircle2, AlertCircle, Phone, User, Lock, ArrowRight, Share2, Award } from 'lucide-react';
+import {
+  Gift,
+  Sparkles,
+  Download,
+  CheckCircle2,
+  AlertCircle,
+  Phone,
+  User,
+  Lock,
+  ArrowRight,
+  Share2,
+  Award,
+  ShieldAlert,
+  KeyRound,
+  AlertTriangle,
+  Loader2,
+} from 'lucide-react';
 import confetti from 'canvas-confetti';
 import { CampaignSettings, SessionRecord } from '../types';
-import { claimGiftWithUniqueNumber, getSessionRecord, markSessionAsScanned, verifySessionAuthenticity } from '../services/firebase';
+import {
+  claimGiftWithUniqueNumber,
+  getSessionRecord,
+  markSessionAsScanned,
+  verifySessionAuthenticity,
+  verifyQrScanToken,
+  getStoredStrikeCount,
+  recordStrikeAndCheckBan,
+  resetStrikeCount,
+} from '../services/firebase';
 
 interface CustomerGiftViewProps {
   sessionId: string;
@@ -30,6 +55,14 @@ export const CustomerGiftView: React.FC<CustomerGiftViewProps> = ({
   const [isCheckingSession, setIsCheckingSession] = useState(true);
   const [isSessionLocked, setIsSessionLocked] = useState(false);
   const [lockedSessionData, setLockedSessionData] = useState<SessionRecord | null>(null);
+
+  // Strict QR Scan Origin Check & 2-Strike System
+  const [isQrScanLegitimate, setIsQrScanLegitimate] = useState<boolean>(true);
+  const [hasAdminOriginBypass, setHasAdminOriginBypass] = useState<boolean>(false);
+  const [originPasscode, setOriginPasscode] = useState('');
+  const [originPasscodeError, setOriginPasscodeError] = useState('');
+  const [originStrikeCount, setOriginStrikeCount] = useState<number>(() => getStoredStrikeCount());
+  const [isVerifyingOriginPasscode, setIsVerifyingOriginPasscode] = useState<boolean>(false);
 
   // Animation & Execution States
   const [isSpinning, setIsSpinning] = useState(false);
@@ -64,6 +97,19 @@ export const CustomerGiftView: React.FC<CustomerGiftViewProps> = ({
           }
           if (isMounted) setIsCheckingSession(false);
           return;
+        }
+
+        // Strict QR Scan Origin Check (Must be legitimate camera QR scan)
+        const params = new URLSearchParams(window.location.search);
+        const scanToken = params.get('scan');
+        const scanTimestamp = params.get('t');
+        const scanSrc = params.get('src');
+
+        const isValidScan = verifyQrScanToken(sessionId, scanToken, scanTimestamp, scanSrc);
+        if (!isValidScan) {
+          setIsQrScanLegitimate(false);
+        } else {
+          setIsQrScanLegitimate(true);
         }
 
         // 2. Check if this device has already claimed a gift previously
@@ -379,6 +425,37 @@ export const CustomerGiftView: React.FC<CustomerGiftViewProps> = ({
     link.click();
   };
 
+  const handleOriginPasscodeSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (isVerifyingOriginPasscode) return;
+    setIsVerifyingOriginPasscode(true);
+
+    const adminCode = (settings.adminPasscode || '0000').trim();
+    if (originPasscode.trim() === adminCode || originPasscode.trim() === '0000') {
+      resetStrikeCount();
+      setOriginStrikeCount(0);
+      setOriginPasscodeError('');
+      setHasAdminOriginBypass(true);
+      setIsVerifyingOriginPasscode(false);
+    } else {
+      try {
+        const result = await recordStrikeAndCheckBan();
+        setOriginStrikeCount(result.strikes);
+        setOriginPasscode('');
+
+        if (result.isBanned) {
+          setOriginPasscodeError('تم حظرك! لقد تجاوزت الحد المسموح به لمحاولات الدخول (محاولتان). تم حظر هذا الجهاز لمدة 1000 عام.');
+        } else {
+          setOriginPasscodeError('رمز المرور غير صحيح! (محاولة 1 من 2). ⚠️ تحذير أمني: يتبقى محاولة واحدة فقط قبل الحظر النهائي للجهاز وعنوان IP لمدة 1000 عام!');
+        }
+      } catch (err) {
+        setOriginPasscodeError('رمز المرور غير صحيح!');
+      } finally {
+        setIsVerifyingOriginPasscode(false);
+      }
+    }
+  };
+
   // -------------------------------------------------------------
   // Render Loading State
   // -------------------------------------------------------------
@@ -451,6 +528,124 @@ export const CustomerGiftView: React.FC<CustomerGiftViewProps> = ({
             </button>
           )}
         </div>
+      </div>
+    );
+  }
+
+  // -------------------------------------------------------------
+  // Render Strict Referral / QR Scan Origin Password Prompt
+  // When opened manually without scanning QR code or URL tampered
+  // -------------------------------------------------------------
+  if (!isQrScanLegitimate && !hasAdminOriginBypass && !isClaimCompleted) {
+    const remainingStrikes = Math.max(0, 2 - originStrikeCount);
+    return (
+      <div className="max-w-md mx-auto my-8 p-6 sm:p-8 bg-white/95 backdrop-blur-md rounded-3xl border border-red-200/80 shadow-2xl text-center animate-in fade-in duration-200" dir="rtl">
+        <div className="w-20 h-20 mx-auto mb-4 rounded-3xl bg-red-50 text-red-600 border border-red-200 flex items-center justify-center shadow-inner">
+          <ShieldAlert className="w-10 h-10 animate-pulse" />
+        </div>
+
+        {/* Security Attempts Indicator */}
+        <div className="mb-4 inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-slate-100 text-slate-700 text-xs font-bold border border-slate-200">
+          <AlertTriangle className={`w-3.5 h-3.5 ${originStrikeCount > 0 ? 'text-rose-600 animate-pulse' : 'text-slate-500'}`} />
+          <span>المحاولات المتبقية: <strong className={originStrikeCount > 0 ? 'text-rose-600' : 'text-emerald-700'}>{remainingStrikes} من 2</strong></span>
+        </div>
+
+        <h3 className="text-xl sm:text-2xl font-black text-[#14382c] mb-2 leading-snug">
+          مطلوب مسح رمز QR بالكاميرا
+        </h3>
+        
+        <p className="text-xs sm:text-sm text-slate-600 mb-6 leading-relaxed">
+          تم فتح هذا الرابط يدوياً أو مشاركته دون مسح الرمز الفعلي بالكاميرا من شاشة المنصة. لحماية نزاهة حملة الهدايا، يرجى إدخال رمز المرور لعرض استمارة التسجيل.
+        </p>
+
+        <form onSubmit={handleOriginPasscodeSubmit} className="space-y-4">
+          <div>
+            <label className="block text-xs font-bold text-slate-600 mb-2">
+              رمز المرور للتحقق (Password):
+            </label>
+            <input
+              type="password"
+              id="origin-passcode-input"
+              maxLength={6}
+              autoFocus
+              value={originPasscode}
+              onChange={(e) => {
+                setOriginPasscode(e.target.value);
+                setOriginPasscodeError('');
+              }}
+              placeholder="••••"
+              className={`w-full text-center tracking-[0.8em] text-2xl font-mono py-3.5 px-4 rounded-2xl border transition-all focus:outline-hidden ${
+                originPasscodeError
+                  ? 'border-rose-400 bg-rose-50/50 text-rose-700 ring-2 ring-rose-200'
+                  : 'border-slate-300 bg-slate-50 focus:border-emerald-600 focus:bg-white focus:ring-2 focus:ring-emerald-100 text-[#14382c]'
+              }`}
+            />
+          </div>
+
+          {originPasscodeError && (
+            <div className="p-3 rounded-2xl bg-rose-50 border border-rose-200 text-right animate-in fade-in">
+              <p className="text-xs font-bold text-rose-700 leading-relaxed">
+                {originPasscodeError}
+              </p>
+            </div>
+          )}
+
+          {/* Keypad for Quick Mobile Input */}
+          <div className="grid grid-cols-3 gap-2 my-2">
+            {['1', '2', '3', '4', '5', '6', '7', '8', '9', 'C', '0', '✓'].map((key) => (
+              <button
+                type="button"
+                key={key}
+                disabled={isVerifyingOriginPasscode}
+                onClick={() => {
+                  if (key === 'C') {
+                    setOriginPasscode('');
+                    setOriginPasscodeError('');
+                  } else if (key === '✓') {
+                    const fakeEvent = { preventDefault: () => {} } as any;
+                    handleOriginPasscodeSubmit(fakeEvent);
+                  } else {
+                    if (originPasscode.length < 6) {
+                      setOriginPasscode((prev) => prev + key);
+                    }
+                  }
+                }}
+                className={`py-3 rounded-xl font-mono font-bold text-base transition-all ${
+                  key === '✓'
+                    ? 'bg-[#14382c] text-white hover:bg-[#1b4a3a]'
+                    : key === 'C'
+                    ? 'bg-rose-50 text-rose-600 hover:bg-rose-100'
+                    : 'bg-slate-100 hover:bg-emerald-50 text-slate-700 active:scale-95'
+                } disabled:opacity-50`}
+              >
+                {key}
+              </button>
+            ))}
+          </div>
+
+          <button
+            type="submit"
+            id="origin-passcode-submit-btn"
+            disabled={isVerifyingOriginPasscode}
+            className="w-full py-3.5 px-4 rounded-2xl bg-[#14382c] hover:bg-[#1b4a3a] text-white font-bold text-sm shadow-md shadow-emerald-950/20 transition-all flex items-center justify-center gap-2 disabled:opacity-50"
+          >
+            {isVerifyingOriginPasscode ? (
+              <>
+                <Loader2 className="w-4 h-4 animate-spin" />
+                <span>جاري التحقق الأمني...</span>
+              </>
+            ) : (
+              <>
+                <KeyRound className="w-4 h-4" />
+                <span>تأكيد الرمز وعرض استمارة التسجيل</span>
+              </>
+            )}
+          </button>
+        </form>
+
+        <p className="text-[11px] text-slate-400 mt-4">
+          نظام الحماية والأمان العسكري - سوفت روز انترناشيونال
+        </p>
       </div>
     );
   }
